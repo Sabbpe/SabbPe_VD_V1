@@ -60,3 +60,8 @@ temp/
 
 # Misc
 .cache/
+frontend/key.json
+backend/key.json
+**/key.json
+**/*key*.json
+**/*credentials*.json
