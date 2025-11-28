@@ -1,0 +1,139 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 215 25% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+
+    --primary: 222 47% 22%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 240 60% 97%;
+    --secondary-foreground: 222 47% 22%;
+
+    --muted: 240 20% 96%;
+    --muted-foreground: 215 15% 50%;
+
+    --accent: 262 52% 47%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 240 20% 90%;
+    --input: 240 20% 90%;
+    --ring: 222 47% 22%;
+
+    --radius: 0.75rem;
+    
+    --gradient-primary: linear-gradient(135deg, hsl(222 47% 22%) 0%, hsl(262 52% 47%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(240 60% 99%) 100%);
+    --gradient-wellness: linear-gradient(135deg, hsl(330 80% 65%) 0%, hsl(280 70% 60%) 100%);
+    --gradient-food: linear-gradient(135deg, hsl(25 95% 60%) 0%, hsl(45 90% 55%) 100%);
+    --gradient-travel: linear-gradient(135deg, hsl(200 90% 60%) 0%, hsl(220 85% 65%) 100%);
+    --gradient-ecommerce: linear-gradient(135deg, hsl(160 70% 50%) 0%, hsl(180 75% 55%) 100%);
+    --gradient-gaming: linear-gradient(135deg, hsl(270 80% 60%) 0%, hsl(290 75% 65%) 100%);
+    --gradient-fashion: linear-gradient(135deg, hsl(340 85% 60%) 0%, hsl(10 80% 65%) 100%);
+    --gradient-jewellery: linear-gradient(135deg, hsl(50 85% 60%) 0%, hsl(30 90% 55%) 100%);
+    --gradient-entertainment: linear-gradient(135deg, hsl(310 80% 60%) 0%, hsl(330 85% 65%) 100%);
+    --gradient-sports: linear-gradient(135deg, hsl(120 70% 50%) 0%, hsl(140 75% 55%) 100%);
+    
+    --shadow-card: 0 4px 12px -2px hsl(222 47% 22% / 0.08);
+    --shadow-card-hover: 0 8px 24px -4px hsl(222 47% 22% / 0.12);
+    --shadow-glow: 0 0 30px -5px;
+    
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222 47% 11%;
+    --foreground: 0 0% 95%;
+
+    --card: 222 40% 14%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 222 40% 14%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 262 52% 47%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 222 35% 20%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 222 35% 20%;
+    --muted-foreground: 215 15% 65%;
+
+    --accent: 262 52% 47%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 222 35% 20%;
+    --input: 222 35% 20%;
+    --ring: 262 52% 47%;
+    
+    --gradient-primary: linear-gradient(135deg, hsl(262 52% 47%) 0%, hsl(222 47% 22%) 100%);
+    --gradient-card: linear-gradient(180deg, hsl(222 40% 14%) 0%, hsl(222 40% 16%) 100%);
+    --gradient-wellness: linear-gradient(135deg, hsl(330 70% 45%) 0%, hsl(280 65% 50%) 100%);
+    --gradient-food: linear-gradient(135deg, hsl(25 85% 50%) 0%, hsl(45 80% 45%) 100%);
+    --gradient-travel: linear-gradient(135deg, hsl(200 80% 50%) 0%, hsl(220 75% 55%) 100%);
+    --gradient-ecommerce: linear-gradient(135deg, hsl(160 60% 40%) 0%, hsl(180 65% 45%) 100%);
+    --gradient-gaming: linear-gradient(135deg, hsl(270 70% 50%) 0%, hsl(290 65% 55%) 100%);
+    --gradient-fashion: linear-gradient(135deg, hsl(340 75% 50%) 0%, hsl(10 70% 55%) 100%);
+    --gradient-jewellery: linear-gradient(135deg, hsl(50 75% 50%) 0%, hsl(30 80% 45%) 100%);
+    --gradient-entertainment: linear-gradient(135deg, hsl(310 70% 50%) 0%, hsl(330 75% 55%) 100%);
+    --gradient-sports: linear-gradient(135deg, hsl(120 60% 40%) 0%, hsl(140 65% 45%) 100%);
+    
+    --shadow-card: 0 4px 12px -2px hsl(0 0% 0% / 0.3);
+    --shadow-card-hover: 0 8px 24px -4px hsl(0 0% 0% / 0.4);
+    --shadow-glow: 0 0 30px -5px;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
