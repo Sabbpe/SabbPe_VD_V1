@@ -140,18 +140,17 @@ router.get('/test-token', authMiddleware, async (req: AuthRequest, res: Response
 router.post('/debug-token', authMiddleware, async (req: AuthRequest, res: Response): Promise<void> => {
     try {
         const axios = require('axios');
-
         logger.info('Debug: Starting raw token generation call');
 
         const response = await axios.post(
-            'http://cards.vdwebapi.com/distributor/api-generatetoken/',
-            { distributor_id: 'VDIDSabbPe' },
+            `${process.env.VD_API_BASE_URL}/distributor/api-generatetoken/`,  // ✅ Use env
+            { distributor_id: process.env.VD_DISTRIBUTOR_ID },  // ✅ Use env
             {
                 timeout: 30000,
                 headers: {
                     'Content-Type': 'application/json',
-                    'username': '25F65B0D6B154A458357CF8330EC695D',
-                    'password': 'uHMu:@=w5A7228BD6F9F4D67AEA0A013',
+                    'username': process.env.VD_API_USERNAME,  // ✅ Use env
+                    'password': process.env.VD_API_PASSWORD,  // ✅ Use env
                 },
                 validateStatus: () => true,
             }
@@ -197,8 +196,8 @@ router.get('/check-outbound-ip', authMiddleware, async (req: AuthRequest, res: R
         res.json({
             success: true,
             outboundIp: outboundIp,
-            expectedIp: '34.93.176.245',
-            matches: outboundIp === '34.93.176.245',
+            expectedIp: process.env.GCP_IP_WHITELIST,
+            matches: outboundIp === process.env.GCP_IP_WHITELIST,
         });
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
