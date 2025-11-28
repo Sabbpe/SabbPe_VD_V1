@@ -1,0 +1,6040 @@
+import express, { Express, Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import { config } from '@/config/env';
+import { testSupabaseConnection, supabase } from '@/config/supabase';
+import { initializeEncryption } from '@/config/encryption';
+import { registerErrorHandler } from '@/middleware/errorHandler';
+import { logger } from '@/utils/logger';
+
+// Import routes
+import authRoutes from '@/routes/auth.routes';
+import voucherRoutes from '@/routes/vouchers.routes';
+import orderRoutes from '@/routes/orders.routes';
+// TODO: import paymentRoutes from '@/routes/payment.routes';
+// TODO: import merchantRoutes from '@/routes/merchants.routes';
+// TODO: import walletRoutes from '@/routes/wallet.routes';
+
+export async function createApp(): Promise<Express> {
+  const app = express();
+
+  // ============================================
+  // SECURITY MIDDLEWARE
+  // ============================================
+
+  app.use(helmet());
+
+  // CORS - Only allow GCP IP
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        const allowedOrigins = [config.gcpIpWhitelist, 'http://localhost:3000'];
+
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('CORS policy violation'));
+        }
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    })
+  );
+
+  // ============================================
+  // BODY PARSING MIDDLEWARE
+  // ============================================
+
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+  // ============================================
+  // REQUEST LOGGING MIDDLEWARE
+  // ============================================
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const startTime = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - startTime;
+      const isError = res.statusCode >= 400;
+      const logLevel = isError ? 'warn' : 'info';
+
+      logger[logLevel as 'info' | 'warn'](`${req.method} ${req.path}`, {
+        statusCode: res.statusCode,
+        duration: `${duration}ms`,
+        ip: req.ip,
+      });
+    });
+
+    next();
+  });
+
+  // ============================================
+  // HEALTH CHECK ENDPOINTS
+  // ============================================
+
+  app.get('/health', (req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+
+  app.get('/health/db', async (req: Request, res: Response) => {
+    try {
+      const isConnected = await testSupabaseConnection();
+      res.json({
+        status: isConnected ? 'ok' : 'error',
+        database: isConnected ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      res.status(500).json({
+        status: 'error',
+        database: 'disconnected',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  // ============================================
+  // API ROUTES
+  // ============================================
+
+  app.use('/api/auth', authRoutes);
+  app.use('/api/vouchers', voucherRoutes);
+  app.use('/api/orders', orderRoutes);
+  // app.use('/api/payment', paymentRoutes);
+  // app.use('/api/merchants', merchantRoutes);
+  // app.use('/api/wallet', walletRoutes);
+
+  // ============================================
+  // ERROR HANDLING
+  // ============================================
+
+  registerErrorHandler(app);
+
+  return app;
+}
+
+export async function startServer(): Promise<void> {
+  try {
+    logger.info('Starting ValueDesign + Sabbpe Backend...', {
+      env: config.nodeEnv,
+      port: config.port,
+    });
+
+    // ============================================
+    // INITIALIZATION
+    // ============================================
+
+    // Test Supabase connection
+    logger.info('Testing Supabase connection...');
+    const dbConnected = await testSupabaseConnection();
+    if (!dbConnected && config.nodeEnv === 'production') {
+      throw new Error('Failed to connect to Supabase in production');
+    }
+
+    // Initialize encryption services
+    logger.info('Initializing encryption services...');
+    initializeEncryption();
+
+    // Create Express app
+    logger.info('Creating Express app...');
+    const app = await createApp();
+
+    // ============================================
+    // START SERVER
+    // ============================================
+
+    app.listen(config.port, () => {
+      logger.info('✓ Server started successfully', {
+        port: config.port,
+        env: config.nodeEnv,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Print API endpoints summary
+      logger.info('Available endpoints:');
+      logger.info('  Auth: POST /api/auth/guest-login');
+      logger.info('  Auth: POST /api/auth/merchant-register');
+      logger.info('  Auth: POST /api/auth/merchant-login');
+      logger.info('  Auth: GET /api/auth/me');
+      logger.info('  Vouchers: GET /api/vouchers/categories');
+      logger.info('  Vouchers: GET /api/vouchers/brands');
+      logger.info('  Vouchers: GET /api/vouchers/brands/:brandCode');
+      logger.info('  Orders: POST /api/orders');
+      logger.info('  Orders: GET /api/orders');
+      logger.info('  Orders: GET /api/orders/:orderId');
+      logger.info('  Orders: GET /api/orders/:orderId/items');
+      logger.info('  Orders: POST /api/orders/:orderId/cancel');
+      logger.info('  Health: GET /health');
+      logger.info('  Health: GET /health/db');
+    });
+  } catch (error) {
+    logger.error('Failed to start server', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    process.exit(1);
+  }
+}
+
+// Start server if this is the main module
+if (require.main === module) {
+  startServer();
+}
+
+
+// ============================================
+// FILE: src/index.ts (ENTRY POINT)
+// ============================================
+
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+import { startServer } from '@/app';
+
+startServer().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
+
+
+src/index.ts
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+import { startServer } from '@/app';
+
+startServer().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
+
+encryption.ts
+
+import { AESEncryptionService } from '@/services/encryption/aes.service';
+import { ValueDesignCryptoService } from '@/services/encryption/valuedesign.crypto';
+import { config } from '@/config/env';
+import { logger } from '@/utils/logger';
+
+let aesService: AESEncryptionService | null = null;
+let valueDesignCrypto: ValueDesignCryptoService | null = null;
+
+/**
+ * Initialize encryption services
+ */
+export function initializeEncryption(): void {
+  try {
+    aesService = new AESEncryptionService({
+      secretKey: config.vdSecretKey,
+      secretIv: config.vdSecretIv,
+    });
+
+    valueDesignCrypto = new ValueDesignCryptoService(aesService);
+
+    logger.info('✓ Encryption services initialized');
+  } catch (error) {
+    logger.error('Failed to initialize encryption services', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+/**
+ * Get AES encryption service
+ */
+export function getAESService(): AESEncryptionService {
+  if (!aesService) {
+    throw new Error('Encryption services not initialized. Call initializeEncryption() first.');
+  }
+  return aesService;
+}
+
+/**
+ * Get ValueDesign crypto service
+ */
+export function getValueDesignCryptoService(): ValueDesignCryptoService {
+  if (!valueDesignCrypto) {
+    throw new Error('Encryption services not initialized. Call initializeEncryption() first.');
+  }
+  return valueDesignCrypto;
+}
+
+env.ts
+
+export interface EnvConfig {
+  // Server
+  port: number;
+  nodeEnv: 'development' | 'production' | 'test';
+  logLevel: string;
+
+  // Supabase
+  supabaseUrl: string;
+  supabaseServiceRoleKey: string;
+
+  // JWT
+  jwtSecret: string;
+  jwtExpiry: string;
+
+  // ValueDesign
+  vdDistributorId: string;
+  vdApiUsername: string;
+  vdApiPassword: string;
+  vdSecretKey: string;
+  vdSecretIv: string;
+  vdApiBaseUrl: string;
+
+  // Sabbpe
+  sabbpeApiKey: string;
+  sabbpeApiSecret: string;
+  sabbpeApiBaseUrl: string;
+  sabbpeWebhookSecret: string;
+
+  // Redis
+  redisUrl: string;
+
+  // GCP
+  gcpIpWhitelist: string;
+}
+
+function validateEnv(): EnvConfig {
+  const requiredEnvVars = [
+    'SUPABASE_URL',
+    'SUPABASE_SERVICE_ROLE_KEY',
+    'JWT_SECRET',
+    'VD_DISTRIBUTOR_ID',
+    'VD_API_USERNAME',
+    'VD_API_PASSWORD',
+    'VD_SECRET_KEY',
+    'VD_SECRET_IV',
+    'VD_API_BASE_URL',
+    'SABBPE_API_KEY',
+    'SABBPE_API_SECRET',
+    'SABBPE_API_BASE_URL',
+    'SABBPE_WEBHOOK_SECRET',
+  ];
+
+  const missing = requiredEnvVars.filter((envVar) => !process.env[envVar]);
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  return {
+    port: parseInt(process.env.PORT || '3000', 10),
+    nodeEnv: (process.env.NODE_ENV as 'development' | 'production' | 'test') || 'development',
+    logLevel: process.env.LOG_LEVEL || 'info',
+
+    supabaseUrl: process.env.SUPABASE_URL!,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+
+    jwtSecret: process.env.JWT_SECRET!,
+    jwtExpiry: process.env.JWT_EXPIRY || '24h',
+
+    vdDistributorId: process.env.VD_DISTRIBUTOR_ID!,
+    vdApiUsername: process.env.VD_API_USERNAME!,
+    vdApiPassword: process.env.VD_API_PASSWORD!,
+    vdSecretKey: process.env.VD_SECRET_KEY!,
+    vdSecretIv: process.env.VD_SECRET_IV!,
+    vdApiBaseUrl: process.env.VD_API_BASE_URL!,
+
+    sabbpeApiKey: process.env.SABBPE_API_KEY!,
+    sabbpeApiSecret: process.env.SABBPE_API_SECRET!,
+    sabbpeApiBaseUrl: process.env.SABBPE_API_BASE_URL!,
+    sabbpeWebhookSecret: process.env.SABBPE_WEBHOOK_SECRET!,
+
+    redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
+
+    gcpIpWhitelist: process.env.GCP_IP_WHITELIST || '34.93.176.245',
+  };
+}
+
+export const config = validateEnv();
+
+
+supabase.ts
+
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+}
+
+export const supabase: SupabaseClient = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: true,
+      persistSession: false,
+    },
+  }
+);
+
+// Helper function to check connection
+export async function testSupabaseConnection(): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('brand_cache')
+      .select('id')
+      .limit(1);
+
+    if (error) {
+      console.error('Supabase connection error:', error);
+      return false;
+    }
+
+    console.log('✓ Supabase connected successfully');
+    return true;
+  } catch (error) {
+    console.error('Failed to test Supabase connection:', error);
+    return false;
+  }
+}
+
+
+src/middleware/auth.middleware.ts
+
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { config } from '@/config/env';
+import { logger } from '@/utils/logger';
+import { UnauthorizedError, ForbiddenError } from '@/utils/errors';
+import { UserRole } from '@/types/database';
+
+export interface AuthenticatedUser {
+  userId: string;
+  email: string;
+  role: UserRole;
+  iat: number;
+  exp: number;
+}
+
+export interface AuthRequest extends Request {
+  user?: AuthenticatedUser;
+}
+
+/**
+ * Verify JWT token and attach user to request
+ */
+export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new UnauthorizedError('Missing or invalid authorization header');
+    }
+
+    const token = authHeader.substring(7);
+
+    const decoded = jwt.verify(token, config.jwtSecret) as AuthenticatedUser;
+    req.user = decoded;
+
+    logger.debug('JWT verified', { userId: decoded.userId, role: decoded.role });
+    next();
+  } catch (error) {
+    if (error instanceof jwt.JsonWebTokenError) {
+      logger.warn('Invalid JWT', { error: error.message });
+      throw new UnauthorizedError('Invalid token');
+    }
+
+    if (error instanceof jwt.TokenExpiredError) {
+      logger.warn('Expired JWT', { expiredAt: error.expiredAt });
+      throw new UnauthorizedError('Token expired');
+    }
+
+    next(error);
+  }
+}
+
+/**
+ * Require specific role(s)
+ */
+export function requireRole(...roles: UserRole[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      throw new UnauthorizedError('User not authenticated');
+    }
+
+    if (!roles.includes(req.user.role)) {
+      logger.warn('Insufficient permissions', {
+        userId: req.user.userId,
+        userRole: req.user.role,
+        requiredRoles: roles,
+      });
+      throw new ForbiddenError('Insufficient permissions');
+    }
+
+    next();
+  };
+}
+
+/**
+ * Require merchant approval
+ */
+export function requireMerchantApproval(req: AuthRequest, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    throw new UnauthorizedError('User not authenticated');
+  }
+
+  if (req.user.role !== UserRole.MERCHANT) {
+    throw new ForbiddenError('Only merchants can access this resource');
+  }
+
+  // In actual implementation, check merchant_sync.is_approved
+  next();
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\middleware\errorHandler.ts
+import { Express, Request, Response, NextFunction } from 'express';
+import { AppError } from '@/utils/errors';
+import { logger } from '@/utils/logger';
+
+export function setupErrorHandler(app: Express): void {
+  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+    console.error('Error:', err);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    });
+  });
+}
+
+export function registerErrorHandler(app: Express): void {
+  // 404 handler
+  app.use((req: Request, res: Response) => {
+    res.status(404).json({
+      success: false,
+      error: 'Route not found',
+      path: req.path,
+      method: req.method,
+    });
+  });
+
+  // Error handler (must be last)
+  app.use((err: Error, req: Request, res: Response, next: NextFunction): void => {
+  console.error('Error:', err);
+  res.status(500).json({
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+      return res.status(err.statusCode).json({
+        success: false,
+        error: err.message,
+        code: err.code,
+      });
+    }
+
+    // Unknown error
+    logger.error('Unhandled error', {
+      message: err.message,
+      stack: err.stack,
+      path: req.path,
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      code: 'INTERNAL_SERVER_ERROR',
+    });
+  });
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\middleware\webhook.middleware.ts
+import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
+import { config } from '@/config/env';
+import { logger } from '@/utils/logger';
+
+/**
+ * Middleware to verify webhook authenticity
+ * Checks for valid signature from payment gateway
+ */
+export function verifyWebhookSignature(req: Request, res: Response, next: NextFunction): void {
+  try {
+    const receivedSignature = req.headers['x-signature'] as string;
+    const payload = req.body;
+
+    if (!receivedSignature) {
+      logger.warn('Webhook missing signature header');
+      res.status(400).json({ success: false, error: 'Missing signature' });
+      return;  // ← Change from "return res.status(...)" to this
+    }
+
+    const message = JSON.stringify(payload);
+    const expectedSignature = crypto
+      .createHmac('sha256', config.sabbpeWebhookSecret)
+      .update(message)
+      .digest('hex');
+
+    const isValid = expectedSignature === receivedSignature;
+
+    if (!isValid) {
+      logger.warn('Webhook signature mismatch', { paymentId: payload.paymentId });
+      res.status(401).json({ success: false, error: 'Invalid signature' });
+      return;  // ← Same here
+    }
+
+    logger.debug('Webhook signature verified', { paymentId: payload.paymentId });
+    next();
+  } catch (error) {
+    logger.error('Webhook verification error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({ success: false, error: 'Signature verification failed' });
+  }
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\routes\auth.routes.ts
+
+import { Router, Response } from 'express';
+import { authService } from '@/services/auth.service';
+import { authMiddleware, AuthRequest } from '@/middleware/auth.middleware';
+import { logger } from '@/utils/logger';
+
+const router = Router();
+
+/**
+ * POST /api/auth/guest-login
+ * Guest login - no registration required
+ */
+router.post('/guest-login', async (req: AuthRequest, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    const result = await authService.guestLogin(email);
+
+    res.status(200).json({
+      success: true,
+      message: 'Guest login successful',
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Guest login route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Guest login failed',
+    });
+  }
+});
+
+/**
+ * POST /api/auth/merchant-register
+ * Register as merchant
+ */
+router.post('/merchant-register', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password, fullName, mobileNumber, businessName, panNumber, aadhaarNumber, gstNumber } = req.body;
+
+    const result = await authService.merchantRegister({
+      email,
+      password,
+      fullName,
+      mobileNumber,
+      businessName,
+      panNumber,
+      aadhaarNumber,
+      gstNumber,
+    } as MerchantRegisterRequest);
+
+    res.status(201).json(result);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Registration failed',
+    });
+  }
+});
+
+// Merchant Login
+router.post('/merchant-login', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    const result = await authService.merchantLogin(email, password);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(401).json({
+      error: error instanceof Error ? error.message : 'Login failed',
+    });
+  }
+});
+
+// Customer Login
+router.post('/customer-login', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    const result = await authService.customerLogin(email, password);
+    res.status(200).json(result);
+  } catch (error) {
+    res.status(401).json({
+      error: error instanceof Error ? error.message : 'Login failed',
+    });
+  }
+});
+
+
+
+/**
+ * POST /api/auth/logout
+ * Logout (token is stateless)
+ */
+router.post('/logout', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: 'Not authenticated',
+      });
+    }
+
+    await authService.logout(userId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Logged out successfully',
+    });
+  } catch (error) {
+    logger.error('Logout route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: 'Logout failed',
+    });
+  }
+});
+
+/**
+ * POST /api/auth/refresh
+ * Refresh JWT token
+ */
+router.post('/refresh', async (req: AuthRequest, res: Response) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Token required',
+      });
+    }
+
+    const newToken = authService.refreshToken(token);
+
+    res.status(200).json({
+      success: true,
+      message: 'Token refreshed',
+      data: {
+        token: newToken,
+        expiresIn: '24h',
+      },
+    });
+  } catch (error) {
+    logger.error('Token refresh route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(401).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Token refresh failed',
+    });
+  }
+});
+
+/**
+ * GET /api/auth/me
+ * Get current user info
+ */
+router.get('/me', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { user } = req;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: 'Not authenticated',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        userId: user.userId,
+        email: user.email,
+        role: user.role,
+        iat: new Date(user.iat * 1000),
+        exp: new Date(user.exp * 1000),
+      },
+    });
+  } catch (error) {
+    logger.error('Get user route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch user info',
+    });
+  }
+});
+
+export default router;
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\routes\index.ts
+import { Router } from 'express';
+import authRoutes from './auth.routes';
+import voucherRoutes from './vouchers.routes';
+import orderRoutes from './orders';
+
+const router = Router();
+
+router.use('/auth', authRoutes);
+router.use('/vouchers', voucherRoutes);
+router.use('/orders', orderRoutes);
+
+export default router;
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\routes\merchants.routes.ts
+
+// ============================================
+// FILE: src/routes/merchants.routes.ts (COMPLETE)
+// ============================================
+
+import { Router, Response } from 'express';
+import { authMiddleware, AuthRequest, requireRole } from '@/middleware/auth.middleware';
+import { merchantService } from '@/services/business/merchant.service';
+import { supabase } from '@/config/supabase';
+import { logger } from '@/utils/logger';
+import { UserRole } from '@/types/database';
+
+const router = Router();
+
+// ============================================
+// HELPER: Get Merchant ID from User ID
+// ============================================
+
+async function getMerchantIdFromUserId(userId: string): Promise<string> {
+  const { data: merchantProfile, error } = await supabase
+    .from('merchant_profiles')
+    .select('id')
+    .eq('user_id', userId)
+    .single();
+
+  if (error || !merchantProfile) {
+    throw new Error('Merchant profile not found');
+  }
+
+  return merchantProfile.id;
+}
+
+// ============================================
+// MERCHANT ROUTES
+// ============================================
+
+/**
+ * GET /api/merchants/dashboard
+ * Get merchant dashboard (Merchant only)
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "merchant": {...},
+ *     "kycStatus": "pending|verified|rejected",
+ *     "approvalStatus": "pending|approved|rejected",
+ *     "documents": [...],
+ *     "canMakePurchases": true|false
+ *   }
+ * }
+ */
+router.get('/dashboard', authMiddleware, requireRole(UserRole.MERCHANT), async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const merchantId = await getMerchantIdFromUserId(userId);
+    const dashboard = await merchantService.getDashboard(merchantId);
+
+    res.status(200).json({
+      success: true,
+      data: dashboard,
+    });
+  } catch (error) {
+    logger.error('Get merchant dashboard route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch dashboard',
+    });
+  }
+});
+
+/**
+ * POST /api/merchants/kyc
+ * Submit KYC (Merchant only)
+ *
+ * Request body:
+ * {
+ *   "videoKycFilePath": "s3://bucket/kyc-video.mp4",
+ *   "selfieFilePath": "s3://bucket/selfie.jpg",
+ *   "latitude": 28.6139,
+ *   "longitude": 77.2090
+ * }
+ */
+router.post('/kyc', authMiddleware, requireRole(UserRole.MERCHANT), async (req: AuthRequest, res: Response) => {
+  try {
+    const { videoKycFilePath, selfieFilePath, latitude, longitude } = req.body;
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    if (!videoKycFilePath && !selfieFilePath) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one of videoKycFilePath or selfieFilePath is required',
+      });
+    }
+
+    const merchantId = await getMerchantIdFromUserId(userId);
+
+    await merchantService.submitKYC({
+      merchantId,
+      videoKycFilePath,
+      selfieFilePath,
+      latitude,
+      longitude,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'KYC submitted successfully',
+    });
+  } catch (error) {
+    logger.error('Submit KYC route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to submit KYC',
+    });
+  }
+});
+
+/**
+ * POST /api/merchants/documents
+ * Upload merchant document (Merchant only)
+ *
+ * Request body:
+ * {
+ *   "documentType": "pan|gst|aadhar|business_license|bank_statement",
+ *   "fileName": "pan-card.pdf",
+ *   "filePath": "s3://bucket/pan-card.pdf",
+ *   "mimeType": "application/pdf",
+ *   "fileSize": 2048
+ * }
+ */
+router.post('/documents', authMiddleware, requireRole(UserRole.MERCHANT), async (req: AuthRequest, res: Response) => {
+  try {
+    const { documentType, fileName, filePath, mimeType, fileSize } = req.body;
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    // Validation
+    if (!documentType || !fileName || !filePath) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: documentType, fileName, filePath',
+      });
+    }
+
+    const merchantId = await getMerchantIdFromUserId(userId);
+
+    await merchantService.uploadDocument({
+      merchantId,
+      documentType: documentType as unknown,
+      fileName,
+      filePath,
+      mimeType,
+      fileSize,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Document uploaded successfully',
+    });
+  } catch (error) {
+    logger.error('Upload document route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to upload document',
+    });
+  }
+});
+
+/**
+ * GET /api/merchants/kyc-status
+ * Get KYC status (Merchant only)
+ */
+router.get('/kyc-status', authMiddleware, requireRole(UserRole.MERCHANT), async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const merchantId = await getMerchantIdFromUserId(userId);
+    const kycStatus = await merchantService.getKYCStatus(merchantId);
+
+    res.status(200).json({
+      success: true,
+      data: kycStatus || { message: 'No KYC submitted yet' },
+    });
+  } catch (error) {
+    logger.error('Get KYC status route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch KYC status',
+    });
+  }
+});
+
+/**
+ * GET /api/merchants/documents
+ * Get merchant documents (Merchant only)
+ */
+router.get('/documents', authMiddleware, requireRole(UserRole.MERCHANT), async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const merchantId = await getMerchantIdFromUserId(userId);
+    const documents = await merchantService.getDocuments(merchantId);
+
+    res.status(200).json({
+      success: true,
+      data: documents,
+      count: documents.length,
+    });
+  } catch (error) {
+    logger.error('Get documents route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch documents',
+    });
+  }
+});
+
+/**
+ * POST /api/merchants/sabbpe-onboard
+ * Onboard merchant with Sabbpe (Merchant only)
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "kycUrl": "https://sabbpe.com/kyc/xxx",
+ *     "status": "pending|approved|rejected"
+ *   }
+ * }
+ */
+router.post('/sabbpe-onboard', authMiddleware, requireRole(UserRole.MERCHANT), async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const merchantId = await getMerchantIdFromUserId(userId);
+    const result = await merchantService.onboardWithSabbpe(merchantId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Merchant onboarded with Sabbpe',
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Sabbpe onboard route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to onboard with Sabbpe',
+    });
+  }
+});
+
+// ============================================
+// ADMIN ROUTES - Approval & Verification
+// ============================================
+
+/**
+ * GET /api/merchants/admin/pending-approvals
+ * Get pending merchant approvals (Admin only)
+ *
+ * Query params:
+ * - limit: Number of results (default: 50)
+ * - offset: Pagination offset (default: 0)
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": [...merchants],
+ *   "pagination": { "limit": 50, "offset": 0, "total": 120 }
+ * }
+ */
+router.get(
+  '/admin/pending-approvals',
+  authMiddleware,
+  requireRole(UserRole.ADMIN),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { limit = '50', offset = '0' } = req.query;
+
+      const result = await merchantService.getPendingApprovals(
+        parseInt(limit as string),
+        parseInt(offset as string)
+      );
+
+      res.status(200).json({
+        success: true,
+        data: result.merchants,
+        pagination: {
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+          total: result.total,
+        },
+      });
+    } catch (error) {
+      logger.error('Get pending approvals route error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to fetch pending approvals',
+      });
+    }
+  }
+);
+
+/**
+ * PATCH /api/merchants/admin/:merchantId/approve
+ * Approve or reject merchant (Admin only)
+ *
+ * Request body:
+ * {
+ *   "approvalStatus": "approved|rejected",
+ *   "rejectionReason": "Optional reason if rejected",
+ *   "riskLevel": "low|medium|high"
+ * }
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "message": "Merchant approved successfully"
+ * }
+ */
+router.patch(
+  '/admin/:merchantId/approve',
+  authMiddleware,
+  requireRole(UserRole.ADMIN),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { merchantId } = req.params;
+      const { approvalStatus, rejectionReason, riskLevel } = req.body;
+      const { userId } = req.user || {};
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Not authenticated' });
+      }
+
+      if (!approvalStatus || !['approved', 'rejected'].includes(approvalStatus)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid approvalStatus. Must be "approved" or "rejected"',
+        });
+      }
+
+      if (approvalStatus === 'rejected' && !rejectionReason) {
+        return res.status(400).json({
+          success: false,
+          error: 'rejectionReason is required when rejecting',
+        });
+      }
+
+      await merchantService.approveMerchant(
+        {
+          merchantId,
+          approvalStatus,
+          rejectionReason,
+          riskLevel,
+        },
+        userId
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `Merchant ${approvalStatus} successfully`,
+      });
+    } catch (error) {
+      logger.error('Approve merchant route error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to process approval',
+      });
+    }
+  }
+);
+
+/**
+ * PATCH /api/merchants/admin/documents/:documentId/verify
+ * Verify document (Admin only)
+ *
+ * Request body:
+ * {
+ *   "status": "verified|rejected",
+ *   "rejectionReason": "Optional reason if rejected"
+ * }
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "message": "Document verified successfully"
+ * }
+ */
+router.patch(
+  '/admin/documents/:documentId/verify',
+  authMiddleware,
+  requireRole(UserRole.ADMIN),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { documentId } = req.params;
+      const { status, rejectionReason } = req.body;
+      const { userId } = req.user || {};
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Not authenticated' });
+      }
+
+      if (!status || !['verified', 'rejected'].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid status. Must be "verified" or "rejected"',
+        });
+      }
+
+      await merchantService.verifyDocument(documentId, userId, status as unknown, rejectionReason);
+
+      res.status(200).json({
+        success: true,
+        message: `Document ${status} successfully`,
+      });
+    } catch (error) {
+      logger.error('Verify document route error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to verify document',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/merchants/admin/:merchantId
+ * Get merchant details (Admin only)
+ */
+router.get(
+  '/admin/:merchantId',
+  authMiddleware,
+  requireRole(UserRole.ADMIN),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { merchantId } = req.params;
+
+      const merchant = await merchantService.getMerchantProfile(merchantId);
+
+      res.status(200).json({
+        success: true,
+        data: merchant,
+      });
+    } catch (error) {
+      logger.error('Get merchant details route error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(404).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Merchant not found',
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/merchants/admin/:merchantId/kyc
+ * Get merchant KYC details (Admin only)
+ */
+router.get(
+  '/admin/:merchantId/kyc',
+  authMiddleware,
+  requireRole(UserRole.ADMIN),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { merchantId } = req.params;
+
+      const kyc = await merchantService.getKYCStatus(merchantId);
+      const documents = await merchantService.getDocuments(merchantId);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          kyc,
+          documents,
+        },
+      });
+    } catch (error) {
+      logger.error('Get merchant KYC route error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(404).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'KYC not found',
+      });
+    }
+  }
+);
+
+export default router;
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\routes\orders.ts
+// src/routes/orders.ts
+import express, { Request, Response } from 'express';
+import supabase from '@/models/supabase';
+import valueDesignService from '@/services/valuedesign';
+import { authMiddleware } from '@/middleware/auth';
+
+const router = express.Router();
+
+interface AuthRequest extends Request {
+  user?: {
+    userId: string;
+    userType: 'customer' | 'guest' | 'merchant';
+    email: string;
+  };
+}
+
+interface CartItem {
+  brandCode: string;
+  brandName: string;
+  denomination: number;
+  quantity: number;
+  totalPrice: number;
+}
+
+/**
+ * Create an order from cart
+ * Used by both B2C customers and B2B merchants
+ */
+router.post('/', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { items, paymentMethod, deliveryMethod } = req.body;
+    const { userId, userType, email } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    if (!items || items.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Cart is empty' });
+    }
+
+    // Calculate total amount
+    const totalAmount = items.reduce(
+      (sum: number, item: CartItem) => sum + item.totalPrice,
+      0
+    );
+
+    // Create order in database
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .insert([
+        {
+          user_id: userId,
+          user_type: userType,
+          user_email: email,
+          items,
+          total_amount: totalAmount,
+          payment_method: paymentMethod,
+          delivery_method: deliveryMethod,
+          status: 'pending', // pending -> processing -> completed -> failed
+          created_at: new Date(),
+        },
+      ])
+      .select()
+      .single();
+
+    if (orderError) {
+      throw orderError;
+    }
+
+    // TODO: Trigger payment gateway based on paymentMethod
+    // For now, mark as awaiting payment
+    // In production, integrate with Razorpay, Stripe, or bank transfer system
+
+    res.status(201).json({
+      success: true,
+      order: {
+        orderId: order.id,
+        totalAmount,
+        status: 'awaiting_payment',
+        message: 'Order created. Awaiting payment confirmation.',
+        items: order.items,
+      },
+    });
+  } catch (error) {
+    console.error('Error creating order:', error);
+    res.status(500).json({ success: false, error: 'Failed to create order' });
+  }
+});
+
+/**
+ * Get orders for current user
+ */
+router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    res.json({
+      success: true,
+      orders,
+      count: orders?.length || 0,
+    });
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch orders' });
+  }
+});
+
+/**
+ * Get order details by order ID
+ */
+router.get('/:orderId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { orderId } = req.params;
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .eq('user_id', userId) // Security: only owner can view
+      .single();
+
+    if (error || !order) {
+      return res
+        .status(404)
+        .json({ success: false, error: 'Order not found' });
+    }
+
+    res.json({
+      success: true,
+      order,
+    });
+  } catch (error) {
+    console.error('Error fetching order details:', error);
+    res
+      .status(500)
+      .json({ success: false, error: 'Failed to fetch order details' });
+  }
+});
+
+/**
+ * Confirm payment for an order
+ * Called after successful payment from payment gateway
+ */
+router.post(
+  '/:orderId/confirm-payment',
+  authMiddleware,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { orderId } = req.params;
+      const { paymentId, transactionId } = req.body;
+      const { userId } = req.user || {};
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      // Get order
+      const { data: order, error: fetchError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .eq('user_id', userId)
+        .single();
+
+      if (fetchError || !order) {
+        return res
+          .status(404)
+          .json({ success: false, error: 'Order not found' });
+      }
+
+      // Update order status
+      const { data: updatedOrder, error: updateError } = await supabase
+        .from('orders')
+        .update({
+          status: 'processing',
+          payment_id: paymentId,
+          transaction_id: transactionId,
+          paid_at: new Date(),
+        })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      // TODO: In production, trigger voucher purchase from ValueDesign here
+      // For now, just mark as processing
+      // purchaseVouchersFromValueDesign(updatedOrder.items);
+
+      res.json({
+        success: true,
+        order: updatedOrder,
+        message: 'Payment confirmed. Processing voucher delivery...',
+      });
+    } catch (error) {
+      console.error('Error confirming payment:', error);
+      res
+        .status(500)
+        .json({ success: false, error: 'Failed to confirm payment' });
+    }
+  }
+);
+
+/**
+ * Deliver vouchers to user
+ * Can be email, SMS, or display in dashboard
+ */
+router.post(
+  '/:orderId/deliver',
+  authMiddleware,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { orderId } = req.params;
+      const { deliveryMethod } = req.body;
+      const { userId } = req.user || {};
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      // Get order
+      const { data: order, error: fetchError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .eq('user_id', userId)
+        .single();
+
+      if (fetchError || !order) {
+        return res
+          .status(404)
+          .json({ success: false, error: 'Order not found' });
+      }
+
+      // Get purchased vouchers from ValueDesign
+      // This would be populated after purchase
+      const vouchers = order.vouchers || [];
+
+      // Deliver based on method
+      if (deliveryMethod === 'email') {
+        // TODO: Send email with voucher codes
+        console.log(`Sending vouchers to ${order.user_email}`);
+      } else if (deliveryMethod === 'sms') {
+        // TODO: Send SMS with voucher codes
+        console.log(`Sending SMS to user`);
+      } else if (deliveryMethod === 'dashboard') {
+        // Vouchers visible in dashboard automatically
+        console.log(`Vouchers available in dashboard`);
+      }
+
+      // Update order status
+      const { data: updatedOrder } = await supabase
+        .from('orders')
+        .update({
+          status: 'completed',
+          delivered_at: new Date(),
+          delivery_method: deliveryMethod,
+        })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      res.json({
+        success: true,
+        order: updatedOrder,
+        vouchers,
+        message: `Vouchers delivered via ${deliveryMethod}`,
+      });
+    } catch (error) {
+      console.error('Error delivering vouchers:', error);
+      res
+        .status(500)
+        .json({ success: false, error: 'Failed to deliver vouchers' });
+    }
+  }
+);
+
+/**
+ * Cancel an order (only if not yet processing payment)
+ */
+router.post(
+  '/:orderId/cancel',
+  authMiddleware,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { orderId } = req.params;
+      const { userId } = req.user || {};
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const { data: order, error: fetchError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .eq('user_id', userId)
+        .single();
+
+      if (fetchError || !order) {
+        return res
+          .status(404)
+          .json({ success: false, error: 'Order not found' });
+      }
+
+      // Can only cancel pending orders
+      if (order.status !== 'pending' && order.status !== 'awaiting_payment') {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot cancel order in ${order.status} status`,
+        });
+      }
+
+      // Update status
+      const { data: cancelledOrder } = await supabase
+        .from('orders')
+        .update({
+          status: 'cancelled',
+          cancelled_at: new Date(),
+        })
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      res.json({
+        success: true,
+        order: cancelledOrder,
+        message: 'Order cancelled successfully',
+      });
+    } catch (error) {
+      console.error('Error cancelling order:', error);
+      res.status(500).json({ success: false, error: 'Failed to cancel order' });
+    }
+  }
+);
+
+export default router;
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\routes\payment.routes.ts
+import { Router, Request, Response } from 'express';
+import { authMiddleware, AuthRequest } from '@/middleware/auth.middleware';
+import { paymentService } from '@/services/business/payment.service';
+import { logger } from '@/utils/logger';
+
+const router = Router();
+
+/**
+ * POST /api/payment/initiate
+ * Initiate payment for an order
+ *
+ * Request body:
+ * {
+ *   "orderId": "ORD-xxx",
+ *   "email": "user@example.com",
+ *   "phone": "+919999999999"
+ * }
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "paymentUrl": "https://sabbpe.com/pay/xxx",
+ *   "paymentId": "PAY-xxx"
+ * }
+ */
+router.post('/initiate', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { orderId, email, phone } = req.body;
+    const { userId } = req.user || {};
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    // Validation
+    if (!orderId || !email || !phone) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: orderId, email, phone',
+      });
+    }
+
+    // Get return and notify URLs from request or use defaults
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const returnUrl = `${protocol}://${host}/payment/return`;
+    const notifyUrl = `${protocol}://${host}/api/payment/webhook/sabbpe`;
+
+    const result = await paymentService.initiatePayment(
+      {
+        orderId,
+        userId,
+        email,
+        phone,
+      },
+      returnUrl,
+      notifyUrl
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment initiated',
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Initiate payment route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to initiate payment',
+    });
+  }
+});
+
+/**
+ * GET /api/payment/status/:orderId
+ * Get payment status for an order
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "orderId": "ORD-xxx",
+ *     "paymentId": "PAY-xxx",
+ *     "status": "SUCCESS|FAILED|PENDING",
+ *     "amount": 1000
+ *   }
+ * }
+ */
+router.get('/status/:orderId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Order ID required',
+      });
+    }
+
+    const paymentStatus = await paymentService.getPaymentStatus(orderId);
+
+    res.status(200).json({
+      success: true,
+      data: paymentStatus,
+    });
+  } catch (error) {
+    logger.error('Get payment status route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(404).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Payment not found',
+    });
+  }
+});
+
+/**
+ * POST /api/payment/webhook/sabbpe
+ * Webhook endpoint for Sabbpe payment notifications
+ *
+ * This endpoint:
+ * 1. Receives encrypted payment status from Sabbpe
+ * 2. Verifies signature
+ * 3. Processes payment status
+ * 4. Delivers vouchers if successful
+ * 5. Handles refunds if failed
+ *
+ * Expected payload:
+ * {
+ *   "paymentId": "PAY-xxx",
+ *   "orderId": "ORD-xxx",
+ *   "status": "SUCCESS|FAILED|PENDING",
+ *   "amount": 1000,
+ *   "currency": "INR",
+ *   "timestamp": "2025-10-20T12:00:00Z",
+ *   "signature": "hmac-sha256-signature"
+ * }
+ *
+ * IMPORTANT: This endpoint should NOT require authentication
+ * because Sabbpe will call it directly
+ */
+router.post('/webhook/sabbpe', async (req: Request, res: Response) => {
+  try {
+    const payload = req.body;
+
+    logger.info('Received Sabbpe webhook', {
+      paymentId: payload.paymentId,
+      orderId: payload.orderId,
+      status: payload.status,
+    });
+
+    // Validate payload structure
+    if (!payload.paymentId || !payload.orderId || !payload.status || !payload.signature) {
+      logger.warn('Invalid webhook payload structure');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid payload',
+      });
+    }
+
+    // Process webhook
+    await paymentService.handlePaymentWebhook(payload);
+
+    // Always return 200 to acknowledge receipt
+    res.status(200).json({
+      success: true,
+      message: 'Webhook processed',
+    });
+  } catch (error) {
+    logger.error('Sabbpe webhook route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    // Return 200 even on error so Sabbpe doesn't retry with wrong data
+    res.status(200).json({
+      success: false,
+      message: 'Webhook received but processing failed',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/payment/webhook/valuedesign
+ * Webhook endpoint for ValueDesign delivery notifications
+ *
+ * ValueDesign calls this after vouchers are delivered
+ */
+router.post('/webhook/valuedesign', async (req: Request, res: Response) => {
+  try {
+    const payload = req.body;
+
+    logger.info('Received ValueDesign webhook', {
+      orderId: payload.orderId,
+      status: payload.status,
+    });
+
+    // TODO: Implement ValueDesign webhook handling
+    // This would update order status based on VD delivery status
+
+    res.status(200).json({
+      success: true,
+      message: 'ValueDesign webhook processed',
+    });
+  } catch (error) {
+    logger.error('ValueDesign webhook route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    res.status(200).json({
+      success: false,
+      message: 'Webhook processing failed',
+    });
+  }
+});
+
+/**
+ * POST /api/payment/refund/:orderId
+ * Manually trigger refund for an order (Admin/Merchant only)
+ */
+router.post('/refund/:orderId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  try {
+    const { orderId } = req.params;
+    const { reason } = req.body;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Order ID required',
+      });
+    }
+
+    await paymentService.refundPayment(orderId, reason || 'Manual refund requested');
+
+    res.status(200).json({
+      success: true,
+      message: 'Refund processed successfully',
+    });
+  } catch (error) {
+    logger.error('Refund route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to process refund',
+    });
+  }
+});
+
+/**
+ * GET /api/payment/verify-webhook
+ * Verify webhook signature (for testing)
+ *
+ * Request query:
+ * ?signature=xxx&payload={"..."}
+ */
+router.get('/verify-webhook', (req: Request, res: Response) => {
+  try {
+    const { signature, payload } = req.query;
+
+    if (!signature || !payload) {
+      return res.status(400).json({
+        success: false,
+        error: 'Signature and payload required',
+      });
+    }
+
+    const parsedPayload = JSON.parse(payload as string);
+
+    // This is for testing only
+    const isValid = true; // Would verify
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isValid,
+        payloadReceived: parsedPayload,
+      },
+    });
+  } catch (error) {
+    logger.error('Verify webhook route error', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(400).json({
+      success: false,
+      error: 'Invalid payload format',
+    });
+  }
+});
+
+export default router;
+
+
+// ============================================
+// FILE: src/types/payment.types.ts
+// ============================================
+
+export interface Payment {
+  id: string;
+  order_id: string;
+  sabbpe_payment_id: string;
+  amount: number;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'REFUNDED';
+  webhook_received_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaymentWebhook {
+  paymentId: string;
+  orderId: string;
+  status: 'SUCCESS' | 'FAILED' | 'PENDING';
+  amount: number;
+  currency: string;
+  timestamp: string;
+  signature: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PaymentInitRequest {
+  orderId: string;
+  amount: number;
+  customerEmail: string;
+  customerPhone: string;
+  description: string;
+}
+
+export interface PaymentInitResponse {
+  paymentId: string;
+  paymentUrl: string;
+  status: string;
+  expiresAt: string;
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\routes\vouchers.routes.ts
+    import { Router, Response } from 'express';
+    import { authMiddleware, AuthRequest } from '@/middleware/auth.middleware';
+    import { voucherService } from '@/services/business/voucher.service';
+    import { logger } from '@/utils/logger';
+
+    const router = Router();
+
+    /**
+     * GET /api/vouchers/categories
+     * Get all active categories
+     */
+    router.get('/categories', async (req: AuthRequest, res: Response) => {
+      try {
+        const categories = await voucherService.getCategories();
+
+        res.status(200).json({
+          success: true,
+          data: categories,
+          count: categories.length,
+        });
+      } catch (error) {
+        logger.error('Get categories route error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to fetch categories',
+        });
+      }
+    });
+
+    /**
+     * GET /api/vouchers/brands
+     * Get all brands with optional refresh
+     */
+    router.get('/brands', async (req: AuthRequest, res: Response) => {
+      try {
+        const { refresh } = req.query;
+        const forceRefresh = refresh === 'true';
+
+        const brands = await voucherService.getBrands(forceRefresh);
+
+        res.status(200).json({
+          success: true,
+          data: brands,
+          count: brands.length,
+          cached: !forceRefresh,
+        });
+      } catch (error) {
+        logger.error('Get brands route error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to fetch brands',
+        });
+      }
+    });
+
+    /**
+     * GET /api/vouchers/brands/:brandCode
+     * Get brand details
+     */
+    router.get('/brands/:brandCode', async (req: AuthRequest, res: Response) => {
+      try {
+        const { brandCode } = req.params;
+
+        const brand = await voucherService.getBrandByCode(brandCode);
+
+        res.status(200).json({
+          success: true,
+          data: brand,
+        });
+      } catch (error) {
+        logger.error('Get brand route error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(404).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Brand not found',
+        });
+      }
+    });
+
+    /**
+     * GET /api/vouchers/categories/:categoryId/brands
+     * Get brands by category
+     */
+    router.get('/categories/:categoryId/brands', async (req: AuthRequest, res: Response) => {
+      try {
+        const { categoryId } = req.params;
+
+        const brands = await voucherService.getBrandsByCategory(categoryId);
+
+        res.status(200).json({
+          success: true,
+          data: brands,
+          count: brands.length,
+        });
+      } catch (error) {
+        logger.error('Get brands by category route error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to fetch brands',
+        });
+      }
+    });
+
+    /**
+     * GET /api/vouchers/search
+     * Search brands by name
+     */
+    router.get('/search', async (req: AuthRequest, res: Response) => {
+      try {
+        const { q } = req.query;
+
+        if (!q || typeof q !== 'string' || q.length < 2) {
+          return res.status(400).json({
+            success: false,
+            error: 'Query must be at least 2 characters',
+          });
+        }
+
+        const brands = await voucherService.searchBrands(q);
+
+        res.status(200).json({
+          success: true,
+          data: brands,
+          count: brands.length,
+          query: q,
+        });
+      } catch (error) {
+        logger.error('Search brands route error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Search failed',
+        });
+      }
+    });
+
+    /**
+     * POST /api/vouchers/refresh-cache (Admin only)
+     * Manually refresh brand cache from ValueDesign
+     */
+    router.post('/refresh-cache', authMiddleware, async (req: AuthRequest, res: Response) => {
+      try {
+        // TODO: Add admin role check
+        // if (req.user?.role !== UserRole.ADMIN) {
+        //   return res.status(403).json({ success: false, error: 'Admin only' });
+        // }
+
+        await voucherService.refreshBrandCache();
+
+        res.status(200).json({
+          success: true,
+          message: 'Brand cache refreshed successfully',
+        });
+      } catch (error) {
+        logger.error('Refresh cache route error', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to refresh cache',
+        });
+      }
+    });
+
+    export default router;
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\business\merchant.service.ts
+
+import { supabase } from '@/config/supabase';
+import { sabbpeService } from '@/services/external/sabbpe.service';
+import { logger } from '@/utils/logger';
+import { NotFoundError, ValidationError } from '@/utils/errors';
+import { MerchantProfile, MerchantSync, MerchantKYC, OnboardingStatus } from '@/types/database';
+
+export interface MerchantKYCSubmissionDTO {
+  merchantId: string;
+  videoKycFilePath?: string;
+  selfieFilePath?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export interface MerchantDocumentUploadDTO {
+  merchantId: string;
+  documentType: 'pan' | 'gst' | 'aadhar' | 'business_license' | 'bank_statement';
+  fileName: string;
+  filePath: string;
+  mimeType: string;
+  fileSize: number;
+}
+
+export interface MerchantApprovalRequest {
+  merchantId: string;
+  approvalStatus: 'approved' | 'rejected';
+  rejectionReason?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
+}
+
+export interface MerchantDashboardDTO {
+  merchant: MerchantProfile;
+  kycStatus: string;
+  approvalStatus: string;
+  documents: Array<{
+    type: string;
+    status: string;
+  }>;
+  onboardingSabbpeStatus?: string;
+  canMakePurchases: boolean;
+}
+
+export class MerchantService {
+  /**
+   * Get merchant profile
+   */
+  async getMerchantProfile(merchantId: string): Promise<MerchantProfile> {
+    try {
+      logger.info('Fetching merchant profile', { merchantId });
+
+      const { data: merchant, error } = await supabase
+        .from('merchant_profiles')
+        .select('*')
+        .eq('id', merchantId)
+        .single();
+
+      if (error || !merchant) {
+        throw new NotFoundError('Merchant profile');
+      }
+
+      logger.info('✓ Merchant profile fetched', { merchantId });
+      return merchant;
+    } catch (error) {
+      logger.error('Failed to fetch merchant profile', {
+        merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Submit KYC
+   */
+  async submitKYC(data: MerchantKYCSubmissionDTO): Promise<void> {
+    try {
+      logger.info('Submitting merchant KYC', { merchantId: data.merchantId });
+
+      // Check if KYC already exists
+      const { data: existingKyc } = await supabase
+        .from('merchant_kyc')
+        .select('id')
+        .eq('merchant_id', data.merchantId)
+        .single();
+
+      if (existingKyc) {
+        // Update existing KYC
+        const { error } = await supabase
+          .from('merchant_kyc')
+          .update({
+            video_kyc_file_path: data.videoKycFilePath,
+            selfie_file_path: data.selfieFilePath,
+            latitude: data.latitude,
+            longitude: data.longitude,
+            location_captured: !!(data.latitude && data.longitude),
+            kyc_status: 'pending',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('merchant_id', data.merchantId);
+
+        if (error) {
+          throw new Error(`Failed to update KYC: ${error.message}`);
+        }
+      } else {
+        // Create new KYC
+        const { error } = await supabase
+          .from('merchant_kyc')
+          .insert([
+            {
+              merchant_id: data.merchantId,
+              video_kyc_file_path: data.videoKycFilePath,
+              selfie_file_path: data.selfieFilePath,
+              latitude: data.latitude,
+              longitude: data.longitude,
+              location_captured: !!(data.latitude && data.longitude),
+              kyc_status: 'pending',
+            },
+          ]);
+
+        if (error) {
+          throw new Error(`Failed to create KYC: ${error.message}`);
+        }
+      }
+
+      // Update merchant onboarding status
+      await supabase
+        .from('merchant_profiles')
+        .update({
+          onboarding_status: 'submitted',
+          submitted_at: new Date().toISOString(),
+        })
+        .eq('id', data.merchantId);
+
+      // Log audit trail
+      await supabase.from('onboarding_audit_log').insert([
+        {
+          merchant_id: data.merchantId,
+          action: 'KYC_SUBMITTED',
+          new_status: 'submitted',
+          notes: 'Merchant submitted KYC documents',
+        },
+      ]);
+
+      logger.info('✓ KYC submitted', { merchantId: data.merchantId });
+    } catch (error) {
+      logger.error('Failed to submit KYC', {
+        merchantId: data.merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Upload merchant document
+   */
+  async uploadDocument(data: MerchantDocumentUploadDTO): Promise<void> {
+    try {
+      logger.info('Uploading merchant document', {
+        merchantId: data.merchantId,
+        documentType: data.documentType,
+      });
+
+      // Validate document type
+      const validTypes = ['pan', 'gst', 'aadhar', 'business_license', 'bank_statement'];
+      if (!validTypes.includes(data.documentType)) {
+        throw new ValidationError(`Invalid document type: ${data.documentType}`);
+      }
+
+      // Insert document record
+      const { error } = await supabase.from('merchant_documents').insert([
+        {
+          merchant_id: data.merchantId,
+          document_type: data.documentType,
+          file_name: data.fileName,
+          file_path: data.filePath,
+          mime_type: data.mimeType,
+          file_size: data.fileSize,
+          status: 'pending',
+        },
+      ]);
+
+      if (error) {
+        throw new Error(`Failed to upload document: ${error.message}`);
+      }
+
+      // Log audit trail
+      await supabase.from('onboarding_audit_log').insert([
+        {
+          merchant_id: data.merchantId,
+          action: 'DOCUMENT_UPLOADED',
+          notes: `Document uploaded: ${data.documentType}`,
+        },
+      ]);
+
+      logger.info('✓ Document uploaded', {
+        merchantId: data.merchantId,
+        documentType: data.documentType,
+      });
+    } catch (error) {
+      logger.error('Failed to upload document', {
+        merchantId: data.merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get merchant KYC status
+   */
+  async getKYCStatus(merchantId: string): Promise<MerchantKYC | null> {
+    try {
+      logger.info('Fetching KYC status', { merchantId });
+
+      const { data: kyc, error } = await supabase
+        .from('merchant_kyc')
+        .select('*')
+        .eq('merchant_id', merchantId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        throw new Error(`Failed to fetch KYC: ${error.message}`);
+      }
+
+      logger.info('✓ KYC status fetched', { merchantId });
+      return kyc || null;
+    } catch (error) {
+      logger.error('Failed to fetch KYC status', {
+        merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get merchant documents
+   */
+  async getDocuments(merchantId: string): Promise<unknown[]> {
+    try {
+      logger.info('Fetching merchant documents', { merchantId });
+
+      const { data: documents, error } = await supabase
+        .from('merchant_documents')
+        .select('*')
+        .eq('merchant_id', merchantId)
+        .order('uploaded_at', { ascending: false });
+
+      if (error) {
+        throw new Error(`Failed to fetch documents: ${error.message}`);
+      }
+
+      logger.info('✓ Documents fetched', { count: documents?.length || 0 });
+      return documents || [];
+    } catch (error) {
+      logger.error('Failed to fetch documents', {
+        merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get merchant dashboard
+   */
+  async getDashboard(merchantId: string): Promise<MerchantDashboardDTO> {
+    try {
+      logger.info('Fetching merchant dashboard', { merchantId });
+
+      const merchant = await this.getMerchantProfile(merchantId);
+      const kyc = await this.getKYCStatus(merchantId);
+      const documents = await this.getDocuments(merchantId);
+
+      const { data: merchantSync } = await supabase
+        .from('merchant_sync')
+        .select('*')
+        .eq('merchant_id', merchantId)
+        .single();
+
+      const canMakePurchases =
+        merchant.onboarding_status === 'approved' && merchantSync?.is_approved;
+
+      logger.info('✓ Dashboard data fetched', { merchantId });
+
+      return {
+        merchant,
+        kycStatus: kyc?.kyc_status || 'not_started',
+        approvalStatus: merchant.onboarding_status,
+        documents: documents.map((doc) => ({
+          type: (doc as any).document_type,
+status: (doc as any).status,
+        })),
+        onboardingSabbpeStatus: merchantSync?.is_approved ? 'approved' : 'pending',
+        canMakePurchases,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch dashboard', {
+        merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Verify document (admin)
+   */
+  async verifyDocument(documentId: string, approvedBy: string, status: 'verified' | 'rejected', rejectionReason?: string): Promise<void> {
+    try {
+      logger.info('Verifying document', { documentId, status });
+
+      const updateData: unknown = {
+        status,
+        verified_at: new Date().toISOString(),
+        verified_by: approvedBy,
+      };
+
+      if (status === 'rejected' && rejectionReason) {
+        updateData.rejection_reason = rejectionReason;
+      }
+
+      const { error } = await supabase
+        .from('merchant_documents')
+        .update(updateData)
+        .eq('id', documentId);
+
+      if (error) {
+        throw new Error(`Failed to verify document: ${error.message}`);
+      }
+
+      logger.info('✓ Document verified', { documentId, status });
+    } catch (error) {
+      logger.error('Failed to verify document', {
+        documentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Approve merchant
+   */
+  async approveMerchant(request: MerchantApprovalRequest, approvedBy: string): Promise<void> {
+    try {
+      logger.info('Processing merchant approval', {
+        merchantId: request.merchantId,
+        status: request.approvalStatus,
+      });
+
+      const newStatus = request.approvalStatus === 'approved' ? 'approved' : 'rejected';
+
+      // Update merchant profile
+      const updateData: unknown = {
+        onboarding_status: newStatus,
+        reviewed_at: new Date().toISOString(),
+        reviewed_by: approvedBy,
+        risk_level: request.riskLevel || 'medium',
+      };
+
+      if (request.approvalStatus === 'rejected') {
+        updateData.rejection_reason = request.rejectionReason;
+      }
+
+      const { error } = await supabase
+        .from('merchant_profiles')
+        .update(updateData)
+        .eq('id', request.merchantId);
+
+      if (error) {
+        throw new Error(`Failed to update merchant: ${error.message}`);
+      }
+
+      // Update merchant_sync
+      await supabase
+        .from('merchant_sync')
+        .update({
+          is_approved: request.approvalStatus === 'approved',
+          approved_at: request.approvalStatus === 'approved' ? new Date().toISOString() : null,
+        })
+        .eq('merchant_id', request.merchantId);
+
+      // Update KYC status
+      await supabase
+        .from('merchant_kyc')
+        .update({
+          kyc_status: newStatus,
+          verified_at: new Date().toISOString(),
+          verified_by: approvedBy,
+        })
+        .eq('merchant_id', request.merchantId);
+
+      // Log approval status change
+      await supabase.from('application_status_history').insert([
+        {
+          merchant_id: request.merchantId,
+          previous_status: 'submitted',
+          new_status: newStatus,
+          changed_by: approvedBy,
+          reason: request.rejectionReason || 'Approved by admin review',
+        },
+      ]);
+
+      // Log audit trail
+      await supabase.from('onboarding_audit_log').insert([
+        {
+          merchant_id: request.merchantId,
+          action: `MERCHANT_${newStatus.toUpperCase()}`,
+          new_status: newStatus,
+          performed_by: approvedBy,
+          notes: request.rejectionReason || 'Merchant approved',
+        },
+      ]);
+
+      // Create notification
+      await supabase.from('notifications').insert([
+        {
+          user_id: null, // Would be merchant's user_id
+          type: request.approvalStatus === 'approved' ? 'success' : 'error',
+          title: request.approvalStatus === 'approved' ? 'Account Approved' : 'Account Rejected',
+          message:
+            request.approvalStatus === 'approved'
+              ? 'Your merchant account has been approved. You can now purchase vouchers.'
+              : `Your merchant account has been rejected. Reason: ${request.rejectionReason}`,
+        },
+      ]);
+
+      logger.info('✓ Merchant approval processed', {
+        merchantId: request.merchantId,
+        status: newStatus,
+      });
+    } catch (error) {
+      logger.error('Failed to approve merchant', {
+        merchantId: request.merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get pending approvals (admin)
+   */
+  async getPendingApprovals(limit = 50, offset = 0): Promise<{ merchants: MerchantProfile[]; total: number }> {
+    try {
+      logger.info('Fetching pending approvals', { limit, offset });
+
+      const { count } = await supabase
+        .from('merchant_profiles')
+        .select('id', { count: 'exact', head: true })
+        .eq('onboarding_status', 'submitted');
+
+      const { data: merchants, error } = await supabase
+        .from('merchant_profiles')
+        .select('*')
+        .eq('onboarding_status', 'submitted')
+        .order('submitted_at', { ascending: true })
+        .range(offset, offset + limit - 1);
+
+      if (error) {
+        throw new Error(`Failed to fetch pending approvals: ${error.message}`);
+      }
+
+      logger.info('✓ Pending approvals fetched', { count: merchants?.length || 0 });
+
+      return {
+        merchants: merchants || [],
+        total: count || 0,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch pending approvals', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Onboard merchant with Sabbpe
+   */
+  async onboardWithSabbpe(merchantId: string): Promise<{ kycUrl: string; status: string }> {
+    try {
+      logger.info('Onboarding merchant with Sabbpe', { merchantId });
+
+      const merchant = await this.getMerchantProfile(merchantId);
+
+      const response = await sabbpeService.onboardMerchant({
+        businessName: merchant.business_name || merchant.full_name,
+        email: merchant.email,
+        mobileNumber: merchant.mobile_number,
+        panNumber: merchant.pan_number,
+        gstNumber: merchant.gst_number,
+      });
+
+      // Store Sabbpe merchant ID
+      await supabase
+        .from('merchant_profiles')
+        .update({
+          bank_application_id: response.merchantId,
+        })
+        .eq('id', merchantId);
+
+      logger.info('✓ Merchant onboarded with Sabbpe', {
+        merchantId,
+        sabbpeMerchantId: response.merchantId,
+      });
+
+      return {
+        kycUrl: response.kycUrl || '',
+        status: response.status,
+      };
+    } catch (error) {
+      logger.error('Failed to onboard merchant with Sabbpe', {
+        merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+}
+
+export const merchantService = new MerchantService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\business\order.service.ts
+import { supabase } from '@/config/supabase';
+import { valueDesignService } from '@/services/external/valuedesign.service';
+import { logger } from '@/utils/logger';
+import { NotFoundError, ValidationError } from '@/utils/errors';
+import { VoucherOrder, VoucherItem, OrderStatus } from '@/types/database';
+import { v4 as uuidv4 } from 'uuid';
+
+export interface CreateOrderDTO {
+  userId: string;
+  merchantId?: string;
+  brandCode: string;
+  brandName: string;
+  skuCode: string;
+  quantity: number;
+  amountPerVoucher: number;
+  recipientFirstName: string;
+  recipientLastName: string;
+  recipientMobile: string;
+  recipientEmail: string;
+  recipientAddress?: string;
+  recipientCity?: string;
+  recipientState?: string;
+  recipientPincode?: string;
+}
+
+export interface OrderDTO {
+  id: string;
+  orderId: string;
+  brandCode: string;
+  brandName: string;
+  quantity: number;
+  totalAmount: number;
+  status: OrderStatus;
+  recipient: {
+    name: string;
+    email: string;
+    mobile: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export class OrderService {
+  /**
+   * Create new order
+   */
+  async createOrder(data: CreateOrderDTO): Promise<OrderDTO> {
+    try {
+      logger.info('Creating new order', {
+        brandCode: data.brandCode,
+        quantity: data.quantity,
+        userId: data.userId,
+      });
+
+      // Validation
+      if (data.quantity <= 0) {
+        throw new ValidationError('Quantity must be greater than 0');
+      }
+
+      if (data.amountPerVoucher <= 0) {
+        throw new ValidationError('Amount per voucher must be greater than 0');
+      }
+
+      const totalAmount = data.quantity * data.amountPerVoucher;
+
+      // Generate unique order ID
+      const orderId = `ORD-${Date.now()}-${uuidv4().substring(0, 8).toUpperCase()}`;
+
+      // Create order
+      const { data: order, error } = await supabase
+        .from('voucher_orders')
+        .insert([
+          {
+            order_id: orderId,
+            user_id: data.userId,
+            merchant_id: data.merchantId,
+            brand_code: data.brandCode,
+            brand_name: data.brandName,
+            sku_code: data.skuCode,
+            quantity: data.quantity,
+            amount_per_voucher: data.amountPerVoucher,
+            total_amount: totalAmount,
+            currency: 'INR',
+            recipient_first_name: data.recipientFirstName,
+            recipient_last_name: data.recipientLastName,
+            recipient_mobile: data.recipientMobile,
+            recipient_email: data.recipientEmail,
+            recipient_address: data.recipientAddress,
+            recipient_city: data.recipientCity,
+            recipient_state: data.recipientState,
+            recipient_pincode: data.recipientPincode,
+            order_status: OrderStatus.PENDING,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error || !order) {
+        throw new Error(`Failed to create order: ${error?.message}`);
+      }
+
+      logger.info('✓ Order created', { orderId, totalAmount });
+
+      return this.mapOrderDTO(order);
+    } catch (error) {
+      logger.error('Failed to create order', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get order by ID
+   */
+  async getOrder(orderId: string, userId?: string): Promise<OrderDTO> {
+    try {
+      logger.info('Fetching order', { orderId });
+
+      let query = supabase
+        .from('voucher_orders')
+        .select('*')
+        .eq('id', orderId);
+
+      if (userId) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data: order, error } = await query.single();
+
+      if (error || !order) {
+        throw new NotFoundError('Order');
+      }
+
+      logger.info('✓ Order fetched', { orderId });
+      return this.mapOrderDTO(order);
+    } catch (error) {
+      logger.error('Failed to fetch order', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get order by order_id (unique order identifier)
+   */
+  async getOrderByOrderId(orderId: string, userId?: string): Promise<OrderDTO> {
+    try {
+      logger.info('Fetching order by order_id', { orderId });
+
+      let query = supabase
+        .from('voucher_orders')
+        .select('*')
+        .eq('order_id', orderId);
+
+      if (userId) {
+        query = query.eq('user_id', userId);
+      }
+
+      const { data: order, error } = await query.single();
+
+      if (error || !order) {
+        throw new NotFoundError('Order');
+      }
+
+      logger.info('✓ Order fetched by order_id', { orderId });
+      return this.mapOrderDTO(order);
+    } catch (error) {
+      logger.error('Failed to fetch order by order_id', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get user's orders
+   */
+  async getUserOrders(userId: string, limit = 50, offset = 0): Promise<{ orders: OrderDTO[]; total: number }> {
+    try {
+      logger.info('Fetching user orders', { userId, limit, offset });
+
+      // Get total count
+      const { count } = await supabase
+        .from('voucher_orders')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId);
+
+      // Get paginated results
+      const { data: orders, error } = await supabase
+        .from('voucher_orders')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (error) {
+        throw new Error(`Failed to fetch orders: ${error.message}`);
+      }
+
+      logger.info('✓ User orders fetched', { count: orders?.length || 0 });
+
+      return {
+        orders: (orders || []).map((order) => this.mapOrderDTO(order)),
+        total: count || 0,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch user orders', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Update order status
+   */
+  async updateOrderStatus(orderId: string, status: OrderStatus, notes?: string): Promise<OrderDTO> {
+    try {
+      logger.info('Updating order status', { orderId, status });
+
+      const updateData: unknown = {
+        order_status: status,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (status === OrderStatus.COMPLETED) {
+        updateData.completed_at = new Date().toISOString();
+      }
+
+      const { data: order, error } = await supabase
+        .from('voucher_orders')
+        .update(updateData)
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (error || !order) {
+        throw new Error(`Failed to update order: ${error?.message}`);
+      }
+
+      logger.info('✓ Order status updated', { orderId, status });
+      return this.mapOrderDTO(order);
+    } catch (error) {
+      logger.error('Failed to update order status', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Add voucher items to order
+   */
+  async addVoucherItems(orderId: string, merchantId: string, items: Partial<VoucherItem>[]): Promise<VoucherItem[]> {
+    try {
+      logger.info('Adding voucher items to order', { orderId, itemCount: items.length });
+
+      const itemsToInsert = items.map((item) => ({
+        order_id: orderId,
+        merchant_id: merchantId,
+        card_number: item.card_number,
+        card_pin: item.card_pin,
+        card_status: 'active',
+        balance_basic: item.balance_basic || 0,
+        balance_bonus: item.balance_bonus || 0,
+        balance_total: item.balance_total || item.balance_basic || 0,
+        expiry_date: item.expiry_date,
+        activation_url: item.activation_url,
+        is_redeemed: false,
+      }));
+
+      const { data: inserted, error } = await supabase
+        .from('voucher_items')
+        .insert(itemsToInsert)
+        .select();
+
+      if (error) {
+        throw new Error(`Failed to insert voucher items: ${error.message}`);
+      }
+
+      logger.info('✓ Voucher items added', { count: inserted?.length || 0 });
+      return inserted || [];
+    } catch (error) {
+      logger.error('Failed to add voucher items', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get voucher items for order
+   */
+  async getVoucherItems(orderId: string): Promise<VoucherItem[]> {
+    try {
+      logger.info('Fetching voucher items', { orderId });
+
+      const { data: items, error } = await supabase
+        .from('voucher_items')
+        .select('*')
+        .eq('order_id', orderId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        throw new Error(`Failed to fetch voucher items: ${error.message}`);
+      }
+
+      logger.info('✓ Voucher items fetched', { count: items?.length || 0 });
+      return items || [];
+    } catch (error) {
+      logger.error('Failed to fetch voucher items', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Store ValueDesign response
+   */
+  async storeValueDesignResponse(
+    orderId: string,
+    vdRefNo: string,
+    response: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      logger.info('Storing ValueDesign response', { orderId, vdRefNo });
+
+      const { error } = await supabase
+        .from('voucher_orders')
+        .update({
+          vd_request_ref_no: vdRefNo,
+          vd_response: response,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId);
+
+      if (error) {
+        throw new Error(`Failed to store response: ${error.message}`);
+      }
+
+      logger.info('✓ ValueDesign response stored');
+    } catch (error) {
+      logger.error('Failed to store ValueDesign response', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel order
+   */
+  async cancelOrder(orderId: string, reason?: string): Promise<OrderDTO> {
+    try {
+      logger.info('Cancelling order', { orderId, reason });
+
+      const { data: order, error: fetchError } = await supabase
+        .from('voucher_orders')
+        .select('order_status')
+        .eq('id', orderId)
+        .single();
+
+      if (fetchError || !order) {
+        throw new NotFoundError('Order');
+      }
+
+      // Can only cancel pending or processing orders
+      if (![OrderStatus.PENDING, OrderStatus.PROCESSING].includes(order.order_status)) {
+        throw new ValidationError(`Cannot cancel order in ${order.order_status} status`);
+      }
+
+      return this.updateOrderStatus(orderId, OrderStatus.FAILED, reason);
+    } catch (error) {
+      logger.error('Failed to cancel order', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Map VoucherOrder to OrderDTO
+   */
+  private mapOrderDTO(order: VoucherOrder): OrderDTO {
+    return {
+      id: order.id,
+      orderId: order.order_id,
+      brandCode: order.brand_code,
+      brandName: order.brand_name,
+      quantity: order.quantity,
+      totalAmount: order.total_amount,
+      status: order.order_status as OrderStatus,
+      recipient: {
+        name: `${order.recipient_first_name} ${order.recipient_last_name}`,
+        email: order.recipient_email,
+        mobile: order.recipient_mobile,
+      },
+      createdAt: order.created_at,
+      updatedAt: order.updated_at,
+      completedAt: order.completed_at,
+    };
+  }
+}
+
+export const orderService = new OrderService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\business\payment.service.ts
+import { supabase } from '@/config/supabase';
+import { valueDesignService } from '@/services/external/valuedesign.service';
+import { sabbpeService, SabbpeWebhookPayload } from '@/services/external/sabbpe.service';
+import { orderService } from '@/services/business/order.service';
+import { logger } from '@/utils/logger';
+import { NotFoundError, ValidationError } from '@/utils/errors';
+import { OrderStatus, TransactionType } from '@/types/database';
+
+export interface PaymentInitiateDTO {
+  orderId: string;
+  userId: string;
+  email: string;
+  phone: string;
+}
+
+export interface PaymentStatusDTO {
+  orderId: string;
+  paymentId: string;
+  status: string;
+  amount: number;
+  message: string;
+}
+
+export interface FormattedEVC {
+  card_number: string;
+  card_pin: string;
+  card_status: string;
+  balance_basic: number;
+  balance_bonus: number;
+  balance_total: number;
+  expiry_date: string;
+}
+
+export class PaymentService {
+  /**
+   * Format EVC card data from ValueDesign response
+   */
+  private formatEVCCard(evc: any): FormattedEVC {
+    return {
+      card_number: evc.getCardNo || '',
+      card_pin: evc.getCardPin || '',
+      card_status: evc.getCardStatus || '',
+      balance_basic: parseFloat(evc.balanceBasic || '0'),
+      balance_bonus: parseFloat(evc.balanceBonus || '0'),
+      balance_total: parseFloat(evc.balanceTotal || '0'),
+      expiry_date: evc.getExpiryDate || '',
+    };
+  }
+
+  /**
+   * Initiate payment for an order
+   */
+  async initiatePayment(
+    data: PaymentInitiateDTO,
+    returnUrl: string,
+    notifyUrl: string
+  ): Promise<{ paymentUrl: string; paymentId: string }> {
+    try {
+      logger.info('Initiating payment', { orderId: data.orderId });
+
+      // Validate inputs
+      if (!data.orderId || !data.userId || !data.email || !data.phone) {
+        throw new ValidationError('Missing required payment data');
+      }
+
+      // Get order
+      const order = await orderService.getOrderByOrderId(data.orderId, data.userId);
+
+      if (order.status !== OrderStatus.PENDING) {
+        throw new ValidationError(`Cannot initiate payment for order in ${order.status} status`);
+      }
+
+      // Update order status to PROCESSING
+      await orderService.updateOrderStatus(data.orderId, OrderStatus.PROCESSING);
+
+      // Initiate payment with Sabbpe
+      const paymentResponse = await sabbpeService.initiatePayment({
+        merchantId: config.sabbpeMerchantId,
+        orderId: data.orderId,
+        amount: Math.round(order.totalAmount * 100), // Convert to paise
+        currency: 'INR',
+        customerEmail: data.email,
+        customerPhone: data.phone,
+        description: `Purchase: ${order.brandName} (Qty: ${order.quantity})`,
+        returnUrl,
+        notifyUrl,
+      });
+
+      // Store payment info in database
+      const { error } = await supabase.from('payments').insert([
+        {
+          order_id: order.id,
+          sabbpe_payment_id: paymentResponse.paymentId,
+          amount: order.totalAmount,
+          currency: 'INR',
+          status: 'PENDING',
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      if (error) {
+        logger.warn('Failed to store payment info', { error: error.message });
+      }
+
+      logger.info('✓ Payment initiated', {
+        orderId: data.orderId,
+        paymentId: paymentResponse.paymentId,
+        amount: order.totalAmount,
+      });
+
+      return {
+        paymentUrl: paymentResponse.paymentUrl,
+        paymentId: paymentResponse.paymentId,
+      };
+    } catch (error) {
+      logger.error('Failed to initiate payment', {
+        orderId: data.orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Handle payment webhook from Sabbpe
+   */
+  async handlePaymentWebhook(payload: SabbpeWebhookPayload): Promise<void> {
+    try {
+      logger.info('Processing payment webhook', {
+        paymentId: payload.paymentId,
+        status: payload.status,
+        orderId: payload.orderId,
+      });
+
+      // Verify signature
+      const isValid = sabbpeService.verifyWebhookSignature(payload, payload.signature);
+      if (!isValid) {
+        logger.warn('Invalid webhook signature', { paymentId: payload.paymentId });
+        throw new ValidationError('Invalid webhook signature');
+      }
+
+      // Get order
+      const order = await orderService.getOrderByOrderId(payload.orderId);
+
+      // Update payment status
+      const { error: paymentError } = await supabase
+        .from('payments')
+        .update({
+          status: payload.status,
+          webhook_received_at: new Date().toISOString(),
+          metadata: payload,
+        })
+        .eq('sabbpe_payment_id', payload.paymentId);
+
+      if (paymentError) {
+        logger.warn('Failed to update payment status', { error: paymentError.message });
+      }
+
+      // Handle based on payment status
+      if (payload.status === 'SUCCESS') {
+        await this.handlePaymentSuccess(order.id, payload.orderId, payload.paymentId);
+      } else if (payload.status === 'FAILED') {
+        await this.handlePaymentFailure(order.id, payload.orderId, payload.paymentId);
+      }
+
+      logger.info('✓ Payment webhook processed', { paymentId: payload.paymentId, status: payload.status });
+    } catch (error) {
+      logger.error('Failed to process payment webhook', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Handle successful payment
+   */
+  private async handlePaymentSuccess(orderId: string, orderIdStr: string, paymentId: string): Promise<void> {
+    try {
+      logger.info('Payment successful, delivering vouchers', { orderId: orderIdStr });
+
+      // Get order details
+      const order = await orderService.getOrder(orderId);
+
+      try {
+        // Call ValueDesign to get EVCs
+        const evcs = await valueDesignService.getEVCs(order.brandCode, order.quantity);
+
+        if (!evcs || evcs.length === 0) {
+          throw new Error('No EVCs returned from ValueDesign');
+        }
+
+        // Format EVC cards
+        const voucherItems = evcs.map((evc) => this.formatEVCCard(evc));
+
+        // Store vouchers in database
+        await orderService.addVoucherItems(orderId, order.brandCode, voucherItems);
+
+        // Store ValueDesign response for audit
+        await orderService.storeValueDesignResponse(orderId, paymentId, {
+          evc_count: evcs.length,
+          timestamp: new Date().toISOString(),
+        });
+
+        // Update order status to COMPLETED
+        await orderService.updateOrderStatus(orderId, OrderStatus.COMPLETED);
+
+        // Log transaction for wallet (post-settlement)
+        const { error: transactionError } = await supabase.from('wallet_transactions').insert([
+          {
+            transaction_type: TransactionType.DEBIT,
+            amount: order.totalAmount,
+            balance_before: 0,
+            balance_after: 0,
+            order_id: orderId,
+            merchant_id: order.merchantId,
+            description: `Payment received for order ${orderIdStr}`,
+            metadata: {
+              paymentId,
+              brandCode: order.brandCode,
+              evcCount: evcs.length,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+
+        if (transactionError) {
+          logger.warn('Failed to create wallet transaction', { error: transactionError.message });
+        }
+
+        logger.info('✓ Vouchers delivered successfully', { orderId: orderIdStr, count: evcs.length });
+      } catch (vdError) {
+        logger.error('ValueDesign delivery failed', {
+          orderId: orderIdStr,
+          error: vdError instanceof Error ? vdError.message : String(vdError),
+        });
+
+        // Mark order as failed if ValueDesign fails
+        await orderService.updateOrderStatus(orderId, OrderStatus.FAILED);
+
+        // Initiate refund
+        try {
+          await sabbpeService.refundPayment(paymentId, order.totalAmount);
+          logger.info('✓ Payment refunded due to delivery failure', { paymentId, orderId: orderIdStr });
+        } catch (refundError) {
+          logger.error('Refund failed', {
+            orderId: orderIdStr,
+            error: refundError instanceof Error ? refundError.message : String(refundError),
+          });
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to handle payment success', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Handle failed payment
+   */
+  private async handlePaymentFailure(_orderId: string, orderIdStr: string, paymentId: string): Promise<void> {
+    try {
+      logger.info('Payment failed, cancelling order', { orderId: orderIdStr });
+
+      // Update order status
+      await orderService.updateOrderStatus(_orderId, OrderStatus.FAILED);
+
+      logger.info('✓ Payment failure handled', { paymentId, orderId: orderIdStr });
+    } catch (error) {
+      logger.error('Failed to handle payment failure', {
+        orderId: _orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get payment status
+   */
+  async getPaymentStatus(orderId: string): Promise<PaymentStatusDTO> {
+    try {
+      logger.info('Fetching payment status', { orderId });
+
+      if (!orderId) {
+        throw new ValidationError('Order ID is required');
+      }
+
+      const { data: payment, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('order_id', orderId)
+        .single();
+
+      if (error || !payment) {
+        throw new NotFoundError('Payment record not found');
+      }
+
+      const order = await orderService.getOrder(orderId);
+
+      return {
+        orderId,
+        paymentId: payment.sabbpe_payment_id,
+        status: payment.status,
+        amount: order.totalAmount,
+        message: `Payment status: ${payment.status}`,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch payment status', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Refund payment for cancelled order
+   */
+  async refundPayment(orderId: string, reason: string): Promise<{ refundId: string }> {
+    try {
+      logger.info('Processing refund', { orderId, reason });
+
+      if (!orderId) {
+        throw new ValidationError('Order ID is required');
+      }
+
+      const { data: payment, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('order_id', orderId)
+        .single();
+
+      if (error || !payment) {
+        throw new NotFoundError('Payment record not found');
+      }
+
+      // Call Sabbpe refund
+      const refundResult = await sabbpeService.refundPayment(payment.sabbpe_payment_id, payment.amount);
+
+      // Update payment status
+      const { error: updateError } = await supabase
+        .from('payments')
+        .update({
+          status: 'REFUNDED',
+          refund_id: refundResult.refundId,
+          refund_reason: reason,
+          refunded_at: new Date().toISOString(),
+        })
+        .eq('id', payment.id);
+
+      if (updateError) {
+        logger.warn('Failed to update payment refund status', { error: updateError.message });
+      }
+
+      logger.info('✓ Refund processed', { refundId: refundResult.refundId, orderId });
+
+      return { refundId: refundResult.refundId };
+    } catch (error) {
+      logger.error('Failed to process refund', {
+        orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+}
+
+export const paymentService = new PaymentService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\business\voucher.service.ts
+import { supabase } from '@/config/supabase';
+import { valueDesignService } from '@/services/external/valuedesign.service';
+import { logger } from '@/utils/logger';
+import { NotFoundError } from '@/utils/errors';
+import { BrandCache, VoucherCategory } from '@/types/database';
+
+export interface BrandDTO {
+  id: string;
+  brandCode: string;
+  brandName: string;
+  category: string;
+  categoryId?: string;
+  discount: number;
+  denominationList: string[];
+  brandType: string;
+  minPrice: number;
+  maxPrice: number;
+  stockAvailable: number;
+  isActive: boolean;
+  description?: string;
+  termsConditions?: string;
+  images?: Record<string, unknown>;
+}
+
+export interface CategoryDTO {
+  id: string;
+  categoryName: string;
+  categorySlug: string;
+  icon?: string;
+  displayOrder: number;
+  isActive: boolean;
+}
+
+export class VoucherService {
+  /**
+   * Get all categories
+   */
+  async getCategories(): Promise<CategoryDTO[]> {
+    try {
+      logger.info('Fetching voucher categories');
+
+      const { data: categories, error } = await supabase
+        .from('voucher_categories')
+        .select('*')
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+
+      if (error) {
+        throw new Error(`Failed to fetch categories: ${error.message}`);
+      }
+
+      const mapped = (categories || []).map((cat) => ({
+        id: cat.id,
+        categoryName: cat.category_name,
+        categorySlug: cat.category_slug,
+        icon: cat.icon,
+        displayOrder: cat.display_order,
+        isActive: cat.is_active,
+      }));
+
+      logger.info('✓ Categories fetched', { count: mapped.length });
+      return mapped;
+    } catch (error) {
+      logger.error('Failed to fetch categories', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all brands with caching strategy
+   * 1. Check if cache exists and is valid
+   * 2. If expired, fetch from ValueDesign API
+   * 3. Update cache
+   * 4. Return brands
+   */
+  async getBrands(forceRefresh = false): Promise<BrandDTO[]> {
+    try {
+      logger.info('Fetching brands', { forceRefresh });
+
+      let brands: BrandCache[] = [];
+
+      if (!forceRefresh) {
+        // Try to get from cache
+        const { data: cachedBrands, error } = await supabase
+          .from('brand_cache')
+          .select('*')
+          .eq('is_active', true)
+          .gt('cache_expires_at', new Date().toISOString());
+
+        if (!error && cachedBrands && cachedBrands.length > 0) {
+          logger.info('✓ Brands loaded from cache', { count: cachedBrands.length });
+          return this.mapBrands(cachedBrands);
+        }
+
+        logger.debug('Cache expired or empty, fetching from ValueDesign');
+      }
+
+      // Fetch from ValueDesign API
+      const vdBrands = await valueDesignService.getBrands();
+
+      // Clear old cache
+      await supabase.from('brand_cache').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+      // Insert new brands
+      const brandsToInsert = vdBrands.map((brand) => ({
+        brand_code: brand.BrandCode,
+        brand_name: brand.BrandName,
+        category: brand.Category,
+        discount: parseFloat(brand.Discount) || 0,
+        denomination_list: brand.DenominationList,
+        brand_type: brand.Brandtype,
+        stock_available: brand.StockAvailable,
+        description: brand.Description,
+        terms_conditions: brand.TnC,
+        images: brand.Images || {},
+        is_active: true,
+        last_fetched_at: new Date().toISOString(),
+        cache_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+      }));
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('brand_cache')
+        .insert(brandsToInsert)
+        .select();
+
+      if (insertError) {
+        logger.warn('Failed to update brand cache', { error: insertError.message });
+      } else {
+        logger.info('✓ Brand cache updated', { count: inserted?.length || 0 });
+      }
+
+      brands = inserted || [];
+
+      return this.mapBrands(brands);
+    } catch (error) {
+      logger.error('Failed to fetch brands', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      // Fallback: return expired cache
+      try {
+        const { data: fallbackBrands } = await supabase
+          .from('brand_cache')
+          .select('*')
+          .eq('is_active', true)
+          .limit(100);
+
+        if (fallbackBrands && fallbackBrands.length > 0) {
+          logger.warn('Returning expired cache due to API failure');
+          return this.mapBrands(fallbackBrands);
+        }
+      } catch (_) {
+        // Ignore fallback errors
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Get brand by code
+   */
+  async getBrandByCode(brandCode: string): Promise<BrandDTO> {
+    try {
+      logger.info('Fetching brand', { brandCode });
+
+      const { data: brand, error } = await supabase
+        .from('brand_cache')
+        .select('*')
+        .eq('brand_code', brandCode)
+        .eq('is_active', true)
+        .single();
+
+      if (error || !brand) {
+        throw new NotFoundError('Brand');
+      }
+
+      const mapped = this.mapBrands([brand]);
+      return mapped[0];
+    } catch (error) {
+      logger.error('Failed to fetch brand', {
+        brandCode,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get brands by category
+   */
+  async getBrandsByCategory(categoryId: string): Promise<BrandDTO[]> {
+    try {
+      logger.info('Fetching brands by category', { categoryId });
+
+      const { data: brands, error } = await supabase
+        .from('brand_cache')
+        .select('*')
+        .eq('category_id', categoryId)
+        .eq('is_active', true)
+        .order('brand_name', { ascending: true });
+
+      if (error) {
+        throw new Error(`Failed to fetch brands: ${error.message}`);
+      }
+
+      logger.info('✓ Brands fetched by category', { count: brands?.length || 0 });
+      return this.mapBrands(brands || []);
+    } catch (error) {
+      logger.error('Failed to fetch brands by category', {
+        categoryId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Search brands by name
+   */
+  async searchBrands(query: string): Promise<BrandDTO[]> {
+    try {
+      logger.info('Searching brands', { query });
+
+      const { data: brands, error } = await supabase
+        .from('brand_cache')
+        .select('*')
+        .eq('is_active', true)
+        .ilike('brand_name', `%${query}%`)
+        .limit(20);
+
+      if (error) {
+        throw new Error(`Failed to search brands: ${error.message}`);
+      }
+
+      logger.info('✓ Brand search completed', { count: brands?.length || 0 });
+      return this.mapBrands(brands || []);
+    } catch (error) {
+      logger.error('Failed to search brands', {
+        query,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Map brand_cache to BrandDTO
+   */
+  private mapBrands(brands: BrandCache[]): BrandDTO[] {
+    return brands.map((brand) => ({
+      id: brand.id,
+      brandCode: brand.brand_code,
+      brandName: brand.brand_name,
+      category: brand.category || '',
+      categoryId: brand.category_id,
+      discount: brand.discount || 0,
+      denominationList: this.parseDenominationList(brand.denomination_list),
+      brandType: brand.brand_type || '',
+      minPrice: this.getMinPrice(brand.denomination_list),
+      maxPrice: this.getMaxPrice(brand.denomination_list),
+      stockAvailable: brand.stock_available || 0,
+      isActive: brand.is_active,
+      description: brand.description,
+      termsConditions: brand.terms_conditions,
+      images: brand.images,
+    }));
+  }
+
+  /**
+   * Parse denomination list from string
+   */
+  private parseDenominationList(denominationStr?: string): string[] {
+    if (!denominationStr) return [];
+    try {
+      return denominationStr.split(',').map((d) => d.trim()).filter((d) => d);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Get minimum price from denomination list
+   */
+  private getMinPrice(denominationStr?: string): number {
+    const denoms = this.parseDenominationList(denominationStr);
+    if (denoms.length === 0) return 0;
+    return Math.min(...denoms.map((d) => parseFloat(d) || 0));
+  }
+
+  /**
+   * Get maximum price from denomination list
+   */
+  private getMaxPrice(denominationStr?: string): number {
+    const denoms = this.parseDenominationList(denominationStr);
+    if (denoms.length === 0) return 0;
+    return Math.max(...denoms.map((d) => parseFloat(d) || 0));
+  }
+
+  /**
+   * Refresh brand cache from ValueDesign
+   */
+  async refreshBrandCache(): Promise<void> {
+    try {
+      logger.info('Manually refreshing brand cache');
+      await this.getBrands(true);
+      logger.info('✓ Brand cache refreshed');
+    } catch (error) {
+      logger.error('Failed to refresh brand cache', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+}
+
+export const voucherService = new VoucherService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\encryption\aes.service.ts
+import crypto from 'crypto';
+import { logger } from '@/utils/logger';
+
+export interface EncryptionConfig {
+  secretKey: string; // Hex format
+  secretIv: string;  // Hex format
+}
+
+export class AESEncryptionService {
+  private config: EncryptionConfig;
+  private algorithm = 'aes-256-cbc';
+
+  constructor(config: EncryptionConfig) {
+    this.config = config;
+    this.validateConfig();
+  }
+
+  private validateConfig(): void {
+    // Validate secret key is 64 hex characters (256 bits)
+    if (!/^[a-f0-9]{64}$/i.test(this.config.secretKey)) {
+      throw new Error('Invalid secret key. Must be 64 hex characters (256 bits)');
+    }
+
+    // Validate IV is 32 hex characters (128 bits)
+    if (!/^[a-f0-9]{32}$/i.test(this.config.secretIv)) {
+      throw new Error('Invalid IV. Must be 32 hex characters (128 bits)');
+    }
+  }
+
+  /**
+   * Encrypt plaintext using AES-256-CBC with PKCS5 padding
+   * @param plaintext - Data to encrypt (string or object)
+   * @returns Base64 encoded encrypted data
+   */
+  encrypt(plaintext: string | Record<string, unknown>): string {
+    try {
+      // Convert to string if object
+      const data = typeof plaintext === 'string' ? plaintext : JSON.stringify(plaintext);
+
+      // Convert hex strings to buffers
+      const key = Buffer.from(this.config.secretKey, 'hex');
+      const iv = Buffer.from(this.config.secretIv, 'hex');
+
+      // Create cipher
+      const cipher = crypto.createCipheriv(this.algorithm, key, iv);
+
+      // Encrypt (PKCS5 padding is same as PKCS7 in Node.js)
+      let encrypted = cipher.update(data, 'utf8', 'binary');
+      encrypted += cipher.final('binary');
+
+      // Convert to Base64
+      const base64 = Buffer.from(encrypted, 'binary').toString('base64');
+
+      logger.debug('Data encrypted successfully', {
+        inputLength: data.length,
+        outputLength: base64.length,
+      });
+
+      return base64;
+    } catch (error) {
+      logger.error('Encryption failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error(`Encryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Decrypt Base64 encoded encrypted data
+   * @param encryptedBase64 - Base64 encoded encrypted data
+   * @returns Decrypted plaintext string
+   */
+  decrypt(encryptedBase64: string): string {
+    try {
+      // Convert hex strings to buffers
+      const key = Buffer.from(this.config.secretKey, 'hex');
+      const iv = Buffer.from(this.config.secretIv, 'hex');
+
+      // Convert Base64 to binary
+      const encrypted = Buffer.from(encryptedBase64, 'base64').toString('binary');
+
+      // Create decipher
+      const decipher = crypto.createDecipheriv(this.algorithm, key, iv);
+
+      // Decrypt (PKCS5 padding is same as PKCS7 in Node.js)
+      let decrypted = decipher.update(encrypted, 'binary', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      logger.debug('Data decrypted successfully', {
+        inputLength: encryptedBase64.length,
+        outputLength: decrypted.length,
+      });
+
+      return decrypted;
+    } catch (error) {
+      logger.error('Decryption failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error(`Decryption failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Decrypt and parse JSON
+   * @param encryptedBase64 - Base64 encoded encrypted JSON
+   * @returns Parsed JSON object
+   */
+  decryptJSON(encryptedBase64: string): Record<string, unknown> {
+    try {
+      const decrypted = this.decrypt(encryptedBase64);
+      return JSON.parse(decrypted);
+    } catch (error) {
+      logger.error('Failed to decrypt and parse JSON', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error(`Failed to decrypt JSON: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\encryption\valuedesign.crypto.ts
+import { AESEncryptionService } from './aes.service';
+import { logger } from '@/utils/logger';
+
+export interface ValueDesignEncryptionPayload {
+  distributor_id: string;
+  api_username: string;
+  api_password: string;
+  request_data: Record<string, unknown>;
+}
+
+export interface ValueDesignDecryptedResponse {
+  responseCode: number;
+  responseMsg: string;
+  [key: string]: unknown;
+}
+
+/**
+ * ValueDesign-specific encryption/decryption service
+ * Handles the specific payload structure required by ValueDesign API
+ */
+export class ValueDesignCryptoService {
+  private aesService: AESEncryptionService;
+
+  constructor(aesService: AESEncryptionService) {
+    this.aesService = aesService;
+  }
+
+  /**
+   * Prepare and encrypt a request for ValueDesign API
+   *
+   * Payload structure:
+   * {
+   *   "distributor_id": "VDIDSabbPe",
+   *   "api_username": "...",
+   *   "api_password": "...",
+   *   "request_data": { ... }
+   * }
+   *
+   * @param distributorId - ValueDesign distributor ID
+   * @param apiUsername - ValueDesign API username
+   * @param apiPassword - ValueDesign API password
+   * @param requestData - Actual request payload
+   * @returns Encrypted Base64 string ready for API call
+   */
+  encryptRequest(
+    distributorId: string,
+    apiUsername: string,
+    apiPassword: string,
+    requestData: Record<string, unknown>
+  ): string {
+    try {
+      const payload: ValueDesignEncryptionPayload = {
+        distributor_id: distributorId,
+        api_username: apiUsername,
+        api_password: apiPassword,
+        request_data: requestData,
+      };
+
+      logger.debug('Encrypting ValueDesign request', {
+        endpoint: requestData.endpoint,
+        hasRequestData: !!requestData,
+      });
+
+      return this.aesService.encrypt(payload);
+    } catch (error) {
+      logger.error('Failed to encrypt ValueDesign request', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Decrypt and parse response from ValueDesign API
+   *
+   * @param encryptedBase64 - Encrypted Base64 response from ValueDesign
+   * @returns Decrypted and parsed response object
+   */
+  decryptResponse(encryptedBase64: string): ValueDesignDecryptedResponse {
+    try {
+      logger.debug('Decrypting ValueDesign response', {
+        responseLength: encryptedBase64.length,
+      });
+
+      const decrypted = this.aesService.decryptJSON(encryptedBase64);
+
+      // Validate response structure
+      if (!('responseCode' in decrypted)) {
+        logger.warn('ValueDesign response missing responseCode', {
+          keys: Object.keys(decrypted),
+        });
+      }
+
+      return decrypted as ValueDesignDecryptedResponse;
+    } catch (error) {
+      logger.error('Failed to decrypt ValueDesign response', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Create an encrypted payload for a specific ValueDesign endpoint
+   *
+   * @param endpoint - ValueDesign API endpoint name (e.g., 'api-generatetoken')
+   * @param params - Endpoint-specific parameters
+   * @param distributorId - ValueDesign distributor ID
+   * @param apiUsername - ValueDesign API username
+   * @param apiPassword - ValueDesign API password
+   * @returns Encrypted payload ready for HTTP request
+   */
+  createEncryptedPayload(
+    endpoint: string,
+    params: Record<string, unknown>,
+    distributorId: string,
+    apiUsername: string,
+    apiPassword: string
+  ): string {
+    const requestData = {
+      endpoint,
+      ...params,
+    };
+
+    return this.encryptRequest(distributorId, apiUsername, apiPassword, requestData);
+  }
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\external\sabbpe.service.ts
+
+// ============================================
+// FILE 1: src/services/external/sabbpe.service.ts
+// ============================================
+
+import axios, { AxiosInstance } from 'axios';
+import crypto from 'crypto';
+import { config } from '@/config/env';
+import { logger } from '@/utils/logger';
+
+export interface SabbpePaymentInitRequest {
+  merchantId: string;
+  orderId: string;
+  amount: number;
+  currency: string;
+  customerEmail: string;
+  customerPhone: string;
+  description: string;
+  returnUrl: string;
+  notifyUrl: string;
+}
+
+export interface SabbpePaymentInitResponse {
+  success: boolean;
+  paymentId: string;
+  paymentUrl: string;
+  expiresAt: string;
+  amount: number;
+  orderId: string;
+}
+
+export interface SabbpeWebhookPayload {
+  paymentId: string;
+  orderId: string;
+  status: 'SUCCESS' | 'FAILED' | 'PENDING';
+  amount: number;
+  currency: string;
+  timestamp: string;
+  signature: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SabbpeMerchantOnboardingRequest {
+  businessName: string;
+  email: string;
+  mobileNumber: string;
+  panNumber?: string;
+  gstNumber?: string;
+  upiVpa?: string;
+  bankAccountNumber?: string;
+  ifscCode?: string;
+  accountHolderName?: string;
+}
+
+export interface SabbpeMerchantOnboardingResponse {
+  success: boolean;
+  merchantId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  kycUrl?: string;
+  message: string;
+}
+
+export class SabbpeService {
+  private axiosInstance: AxiosInstance;
+
+  constructor() {
+    this.axiosInstance = axios.create({
+      baseURL: config.sabbpeApiBaseUrl,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': config.sabbpeApiKey,
+      },
+    });
+  }
+
+  /**
+   * Generate HMAC-SHA256 signature for request
+   */
+  private generateSignature(payload: Record<string, unknown>): string {
+    const message = JSON.stringify(payload);
+    const signature = crypto
+      .createHmac('sha256', config.sabbpeApiSecret)
+      .update(message)
+      .digest('hex');
+
+    logger.debug('Signature generated', { payloadLength: message.length });
+    return signature;
+  }
+
+  /**
+   * Verify webhook signature
+   */
+  verifyWebhookSignature(payload: SabbpeWebhookPayload, receivedSignature: string): boolean {
+    try {
+      const payloadToVerify = {
+        paymentId: payload.paymentId,
+        orderId: payload.orderId,
+        status: payload.status,
+        amount: payload.amount,
+        currency: payload.currency,
+        timestamp: payload.timestamp,
+      };
+
+      const expectedSignature = this.generateSignature(payloadToVerify);
+      const isValid = expectedSignature === receivedSignature;
+
+      if (!isValid) {
+        logger.warn('Webhook signature verification failed', {
+          paymentId: payload.paymentId,
+          expected: expectedSignature.substring(0, 8),
+          received: receivedSignature.substring(0, 8),
+        });
+      } else {
+        logger.debug('Webhook signature verified', { paymentId: payload.paymentId });
+      }
+
+      return isValid;
+    } catch (error) {
+      logger.error('Signature verification error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Initiate payment with Sabbpe
+   */
+  async initiatePayment(request: SabbpePaymentInitRequest): Promise<SabbpePaymentInitResponse> {
+    try {
+      logger.info('Initiating Sabbpe payment', {
+        orderId: request.orderId,
+        amount: request.amount,
+      });
+
+      const payload = {
+        merchantId: request.merchantId,
+        orderId: request.orderId,
+        amount: request.amount,
+        currency: request.currency,
+        customerEmail: request.customerEmail,
+        customerPhone: request.customerPhone,
+        description: request.description,
+        returnUrl: request.returnUrl,
+        notifyUrl: request.notifyUrl,
+        timestamp: new Date().toISOString(),
+      };
+
+      const signature = this.generateSignature(payload);
+
+      const response = await this.axiosInstance.post('/payments/initiate', payload, {
+        headers: {
+          'X-Signature': signature,
+        },
+      });
+
+      if (!response.data.success) {
+        throw new Error(`Payment initiation failed: ${response.data.message}`);
+      }
+
+      logger.info('✓ Payment initiated with Sabbpe', {
+        paymentId: response.data.paymentId,
+        orderId: request.orderId,
+      });
+
+      return {
+        success: true,
+        paymentId: response.data.paymentId,
+        paymentUrl: response.data.paymentUrl,
+        expiresAt: response.data.expiresAt,
+        amount: response.data.amount,
+        orderId: response.data.orderId,
+      };
+    } catch (error) {
+      logger.error('Failed to initiate payment with Sabbpe', {
+        orderId: request.orderId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get payment status
+   */
+  async getPaymentStatus(paymentId: string): Promise<{ status: string; amount: number }> {
+    try {
+      logger.info('Fetching payment status from Sabbpe', { paymentId });
+
+      const response = await this.axiosInstance.get(`/payments/${paymentId}/status`);
+
+      if (!response.data.success) {
+        throw new Error(`Failed to fetch payment status: ${response.data.message}`);
+      }
+
+      logger.info('✓ Payment status fetched', {
+        paymentId,
+        status: response.data.status,
+      });
+
+      return {
+        status: response.data.status,
+        amount: response.data.amount,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch payment status', {
+        paymentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Refund payment
+   */
+  async refundPayment(paymentId: string, amount?: number): Promise<{ success: boolean; refundId: string }> {
+    try {
+      logger.info('Processing refund with Sabbpe', { paymentId, amount });
+
+      const payload = {
+        paymentId,
+        amount,
+        timestamp: new Date().toISOString(),
+      };
+
+      const signature = this.generateSignature(payload);
+
+      const response = await this.axiosInstance.post('/payments/refund', payload, {
+        headers: {
+          'X-Signature': signature,
+        },
+      });
+
+      if (!response.data.success) {
+        throw new Error(`Refund failed: ${response.data.message}`);
+      }
+
+      logger.info('✓ Refund processed', {
+        paymentId,
+        refundId: response.data.refundId,
+      });
+
+      return {
+        success: true,
+        refundId: response.data.refundId,
+      };
+    } catch (error) {
+      logger.error('Failed to process refund', {
+        paymentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Onboard merchant with Sabbpe
+   */
+  async onboardMerchant(request: SabbpeMerchantOnboardingRequest): Promise<SabbpeMerchantOnboardingResponse> {
+    try {
+      logger.info('Onboarding merchant with Sabbpe', { email: request.email });
+
+      const payload = {
+        businessName: request.businessName,
+        email: request.email,
+        mobileNumber: request.mobileNumber,
+        panNumber: request.panNumber,
+        gstNumber: request.gstNumber,
+        upiVpa: request.upiVpa,
+        bankAccountNumber: request.bankAccountNumber,
+        ifscCode: request.ifscCode,
+        accountHolderName: request.accountHolderName,
+        timestamp: new Date().toISOString(),
+      };
+
+      const signature = this.generateSignature(payload);
+
+      const response = await this.axiosInstance.post('/merchants/onboard', payload, {
+        headers: {
+          'X-Signature': signature,
+        },
+      });
+
+      if (!response.data.success) {
+        throw new Error(`Merchant onboarding failed: ${response.data.message}`);
+      }
+
+      logger.info('✓ Merchant onboarded with Sabbpe', {
+        merchantId: response.data.merchantId,
+        status: response.data.status,
+      });
+
+      return {
+        success: true,
+        merchantId: response.data.merchantId,
+        status: response.data.status,
+        kycUrl: response.data.kycUrl,
+        message: response.data.message,
+      };
+    } catch (error) {
+      logger.error('Failed to onboard merchant', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get merchant status
+   */
+  async getMerchantStatus(merchantId: string): Promise<{ status: string; kycStatus: string }> {
+    try {
+      logger.info('Fetching merchant status from Sabbpe', { merchantId });
+
+      const response = await this.axiosInstance.get(`/merchants/${merchantId}/status`);
+
+      if (!response.data.success) {
+        throw new Error(`Failed to fetch merchant status: ${response.data.message}`);
+      }
+
+      logger.info('✓ Merchant status fetched', {
+        merchantId,
+        status: response.data.status,
+      });
+
+      return {
+        status: response.data.status,
+        kycStatus: response.data.kycStatus,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch merchant status', {
+        merchantId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+}
+
+export const sabbpeService = new SabbpeService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\external\valuedesign.service.ts
+// FILE 1: src/services/external/valuedesign.service.ts
+// ============================================================================
+
+import axios, { AxiosInstance } from 'axios';
+import { getValueDesignCryptoService } from '@/config/encryption';
+import { config } from '@/config/env';
+import { logger } from '@/utils/logger';
+import { ValueDesignTransaction } from '@/types/database';
+import { supabase } from '@/config/supabase';
+
+interface ValueDesignDecryptedResponse {
+  responseCode: number;
+  responseMsg: string;
+  token?: string;
+  expiry_date?: string | number;
+  brands?: Array<{
+    BrandCode: string;
+    BrandName: string;
+    Discount: string;
+    Brandtype: string;
+    minPrice: number;
+    maxPrice: number;
+    DenominationList: string;
+    Category: string;
+    Description: string;
+    StockAvailable: number;
+    Images?: unknown;
+    TnC?: unknown;
+  }>;
+  evc?: Array<{
+    getCardNo: string;
+    getCardPin: string;
+    getCardStatus: string;
+    getExpiryDate: string;
+    balanceBasic: string;
+    balanceBonus: string;
+    balanceTotal: string;
+  }>;
+  stores?: Array<unknown>;
+}
+
+interface VDBrandResponse {
+  BrandCode: string;
+  BrandName: string;
+  Discount: string;
+  Brandtype: string;
+  minPrice: number;
+  maxPrice: number;
+  DenominationList: string;
+  Category: string;
+  Description: string;
+  StockAvailable: number;
+}
+
+interface VDEVCResponse {
+  getCardNo: string;
+  getCardPin: string;
+  getCardStatus: string;
+  getExpiryDate: string;
+  balanceBasic: string;
+  balanceBonus: string;
+  balanceTotal: string;
+}
+
+export class ValueDesignService {
+  private axiosInstance: AxiosInstance;
+  private token: string | null = null;
+  private tokenExpiry: Date | null = null;
+  private cryptoService = getValueDesignCryptoService();
+
+  constructor() {
+    this.axiosInstance = axios.create({
+      baseURL: config.vdApiBaseUrl,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+
+  /**
+   * Generate or refresh token from ValueDesign
+   */
+  async getToken(): Promise<string> {
+    // Check if we have a valid cached token
+    if (this.token && this.tokenExpiry && new Date() < this.tokenExpiry) {
+      logger.debug('Using cached ValueDesign token');
+      return this.token;
+    }
+
+    try {
+      logger.info('Generating new ValueDesign token');
+
+      const requestData = {
+        distributor_id: config.vdDistributorId,
+        password: config.vdApiPassword,
+      };
+
+      const encryptedPayload = this.cryptoService.createEncryptedPayload(
+        'api-generatetoken',
+        requestData,
+        config.vdDistributorId,
+        config.vdApiUsername,
+        config.vdApiPassword
+      );
+
+      const response = await this.axiosInstance.post('/api-generatetoken/', {
+        encrypted_data: encryptedPayload,
+      });
+
+      const decrypted = this.cryptoService.decryptResponse(response.data.encrypted_response) as ValueDesignDecryptedResponse;
+
+      if (decrypted.responseCode !== 200) {
+        throw new Error(`Token generation failed: ${decrypted.responseMsg}`);
+      }
+
+      if (!decrypted.token) {
+        throw new Error('No token in response');
+      }
+
+      this.token = decrypted.token;
+      const expiryDate = new Date(decrypted.expiry_date as string);
+      this.tokenExpiry = new Date(expiryDate.getTime() - 5 * 60000); // Refresh 5 min before expiry
+
+      logger.info('✓ ValueDesign token generated', {
+        expiresAt: this.tokenExpiry.toISOString(),
+      });
+
+      return this.token;
+    } catch (error) {
+      logger.error('Failed to generate ValueDesign token', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.token = null;
+      this.tokenExpiry = null;
+      throw error;
+    }
+  }
+
+  /**
+   * Get all available brands from ValueDesign
+   */
+  async getBrands(): Promise<VDBrandResponse[]> {
+    try {
+      logger.info('Fetching brands from ValueDesign');
+      const token = await this.getToken();
+
+      const requestData = {
+        token,
+      };
+
+      const encryptedPayload = this.cryptoService.createEncryptedPayload(
+        'api-getbrand',
+        requestData,
+        config.vdDistributorId,
+        config.vdApiUsername,
+        config.vdApiPassword
+      );
+
+      const response = await this.axiosInstance.get('/api-getbrand/', {
+        params: { encrypted_data: encryptedPayload },
+      });
+
+      const decrypted = this.cryptoService.decryptResponse(response.data.encrypted_response) as ValueDesignDecryptedResponse;
+
+      if (decrypted.responseCode !== 200) {
+        throw new Error(`Failed to fetch brands: ${decrypted.responseMsg}`);
+      }
+
+      const brands = decrypted.brands || [];
+      logger.info('✓ Brands fetched', { count: brands.length });
+
+      return brands;
+    } catch (error) {
+      logger.error('Failed to fetch brands from ValueDesign', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get E-Voucher Cards (EVCs) for a specific brand
+   */
+  async getEVCs(brandCode: string, quantity: number): Promise<VDEVCResponse[]> {
+    try {
+      logger.info('Fetching EVCs from ValueDesign', { brandCode, quantity });
+
+      if (!brandCode || quantity <= 0) {
+        throw new Error('Invalid brandCode or quantity');
+      }
+
+      const token = await this.getToken();
+
+      const requestData = {
+        token,
+        brand_code: brandCode,
+        quantity,
+      };
+
+      const encryptedPayload = this.cryptoService.createEncryptedPayload(
+        'getevc',
+        requestData,
+        config.vdDistributorId,
+        config.vdApiUsername,
+        config.vdApiPassword
+      );
+
+      const response = await this.axiosInstance.get('/getevc/', {
+        params: { encrypted_data: encryptedPayload },
+      });
+
+      const decrypted = this.cryptoService.decryptResponse(response.data.encrypted_response) as ValueDesignDecryptedResponse;
+
+      if (decrypted.responseCode !== 200) {
+        throw new Error(`Failed to fetch EVCs: ${decrypted.responseMsg}`);
+      }
+
+      const evcs = decrypted.evc || [];
+      logger.info('✓ EVCs fetched', { count: evcs.length, brandCode });
+
+      return evcs;
+    } catch (error) {
+      logger.error('Failed to fetch EVCs from ValueDesign', {
+        error: error instanceof Error ? error.message : String(error),
+        brandCode,
+        quantity,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get store locations for a brand
+   */
+  async getStores(brandCode: string): Promise<unknown[]> {
+    try {
+      logger.info('Fetching stores from ValueDesign', { brandCode });
+      const token = await this.getToken();
+
+      const requestData = {
+        token,
+        brand_code: brandCode,
+      };
+
+      const encryptedPayload = this.cryptoService.createEncryptedPayload(
+        'api-getstore',
+        requestData,
+        config.vdDistributorId,
+        config.vdApiUsername,
+        config.vdApiPassword
+      );
+
+      const response = await this.axiosInstance.get('/api-getstore/', {
+        params: { encrypted_data: encryptedPayload },
+      });
+
+      const decrypted = this.cryptoService.decryptResponse(response.data.encrypted_response) as ValueDesignDecryptedResponse;
+
+      if (decrypted.responseCode !== 200) {
+        throw new Error(`Failed to fetch stores: ${decrypted.responseMsg}`);
+      }
+
+      const stores = decrypted.stores || [];
+      logger.info('✓ Stores fetched', { count: stores.length, brandCode });
+
+      return stores;
+    } catch (error) {
+      logger.error('Failed to fetch stores from ValueDesign', {
+        error: error instanceof Error ? error.message : String(error),
+        brandCode,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Log API transaction to database for audit trail
+   */
+  private async logTransaction(txn: Omit<ValueDesignTransaction, 'id' | 'created_at'>): Promise<void> {
+    try {
+      const { error } = await supabase.from('valuedesign_transactions').insert([txn]);
+
+      if (error) {
+        logger.warn('Failed to log ValueDesign transaction', { error: error.message });
+      }
+    } catch (error) {
+      logger.warn('Failed to log ValueDesign transaction', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
+export const valueDesignService = new ValueDesignService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\auth.service.ts
+
+// CORRECTED auth.service.ts - FULL FILE
+
+import jwt from 'jsonwebtoken';
+import { config } from '@/config/env';
+import { supabase } from '@/config/supabase';
+import { logger } from '@/utils/logger';
+import { UnauthorizedError, ConflictError, NotFoundError } from '@/utils/errors';
+import { User, UserRole, MerchantSync } from '@/types/database';
+
+export interface JWTPayload {
+  userId: string;
+  email: string;
+  role: UserRole;
+}
+
+export interface GuestLoginResponse {
+  user: User;
+  token: string;
+  expiresIn: string;
+}
+
+export interface MerchantRegisterRequest {
+  email: string;
+  password: string;
+  fullName: string;
+  mobileNumber: string;
+  businessName: string;
+  panNumber?: string;
+  aadhaarNumber?: string;
+  gstNumber?: string;
+}
+
+export interface MerchantLoginResponse {
+  user: User;
+  merchant: MerchantSync;
+  token: string;
+  expiresIn: string;
+  isApproved: boolean;
+}
+
+export class AuthService {
+  /**
+   * Generate JWT token
+   */
+  private generateToken(payload: JWTPayload): string {
+    return jwt.sign(payload, config.jwtSecret as string, {
+      expiresIn: config.jwtExpiry,
+    });
+  }
+
+  /**
+   * Guest login - create temporary session without registration
+   */
+  async guestLogin(email?: string): Promise<GuestLoginResponse> {
+    try {
+      logger.info('Guest login initiated', { email });
+
+      // Generate random password for guest
+      const guestPassword = Math.random().toString(36).slice(-12);
+
+      // Create guest user in auth.users
+      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+        email: email || `guest-${Date.now()}@giftgo.local`,
+        password: guestPassword,
+        email_confirm: true,
+      });
+
+      if (authError) {
+        throw new Error(`Failed to create guest user: ${authError.message}`);
+      }
+
+      const userId = authData.user!.id;
+      const userEmail = authData.user!.email!;
+
+      // Assign GUEST role
+      const { error: roleError } = await supabase
+        .from('user_roles')
+        .insert([
+          {
+            user_id: userId,
+            role: UserRole.GUEST,
+          },
+        ]);
+
+      if (roleError) {
+        throw new Error(`Failed to assign guest role: ${roleError.message}`);
+      }
+
+      // Generate JWT
+      const token = this.generateToken({
+        userId,
+        email: userEmail,
+        role: UserRole.GUEST,
+      });
+
+      logger.info('✓ Guest login successful', { userId });
+
+      return {
+        user: {
+          id: userId,
+          email: userEmail,
+          created_at: authData.user!.created_at!,
+        },
+        token,
+        expiresIn: config.jwtExpiry,
+      };
+    } catch (error) {
+      logger.error('Guest login failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Merchant registration
+   */
+  async merchantRegister(req: MerchantRegisterRequest): Promise<GuestLoginResponse> {
+    try {
+      logger.info('Merchant registration initiated', { email: req.email });
+
+      // Check if email already exists
+      const { data: existingUser } = await supabase
+        .from('merchant_profiles')
+        .select('id')
+        .eq('email', req.email)
+        .single();
+
+      if (existingUser) {
+        throw new ConflictError('Email already registered');
+      }
+
+      // Create auth user with proper error handling
+      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+        email: req.email,
+        password: req.password,
+        email_confirm: true,
+      });
+
+      if (authError) {
+        throw new Error(`Failed to create user: ${authError.message}`);
+      }
+
+      const userId = authData.user!.id;
+
+      // Create merchant profile
+      const { error: profileError } = await supabase
+        .from('merchant_profiles')
+        .insert([
+          {
+            user_id: userId,
+            full_name: req.fullName,
+            mobile_number: req.mobileNumber,
+            email: req.email,
+            business_name: req.businessName,
+            pan_number: req.panNumber || null,
+            aadhaar_number: req.aadhaarNumber || null,
+            gst_number: req.gstNumber || null,
+            onboarding_status: 'pending',
+          },
+        ]);
+
+      if (profileError) {
+        throw new Error(`Failed to create merchant profile: ${profileError.message}`);
+      }
+
+      // Create merchant_sync entry
+      const { error: syncError } = await supabase
+        .from('merchant_sync')
+        .insert([
+          {
+            merchant_id: userId,
+            user_id: userId,
+            business_name: req.businessName,
+            email: req.email,
+            mobile_number: req.mobileNumber,
+            is_approved: false,
+          },
+        ]);
+
+      if (syncError) {
+        logger.warn('Failed to create merchant_sync entry', { error: syncError.message });
+      }
+
+      // Assign MERCHANT role
+      const { error: roleError } = await supabase
+        .from('user_roles')
+        .insert([
+          {
+            user_id: userId,
+            role: UserRole.MERCHANT,
+          },
+        ]);
+
+      if (roleError) {
+        throw new Error(`Failed to assign merchant role: ${roleError.message}`);
+      }
+
+      // Generate JWT
+      const token = this.generateToken({
+        userId,
+        email: req.email,
+        role: UserRole.MERCHANT,
+      });
+
+      logger.info('✓ Merchant registered successfully', { userId, email: req.email });
+
+      return {
+        user: {
+          id: userId,
+          email: req.email,
+          created_at: authData.user!.created_at!,
+        },
+        token,
+        expiresIn: config.jwtExpiry,
+      };
+    } catch (error) {
+      logger.error('Merchant registration failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Merchant login with approval check
+   */
+  async merchantLogin(email: string, password: string): Promise<MerchantLoginResponse> {
+    try {
+      logger.info('Merchant login initiated', { email });
+
+      // Authenticate with Supabase
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) {
+        logger.warn('Authentication failed', { email, error: authError.message });
+        throw new UnauthorizedError('Invalid email or password');
+      }
+
+      const userId = authData.user!.id;
+
+      // Get merchant profile
+      const { data: merchantProfile, error: profileError } = await supabase
+        .from('merchant_profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+      if (profileError || !merchantProfile) {
+        throw new NotFoundError('Merchant profile not found');
+      }
+
+      // Get merchant_sync to check approval
+      const { data: merchantSync, error: syncError } = await supabase
+        .from('merchant_sync')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+      if (syncError) {
+        logger.warn('Failed to fetch merchant_sync', { error: syncError.message });
+      }
+
+      const isApproved = merchantSync?.is_approved || false;
+
+      // Get user role
+      const { data: roleData } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .single();
+
+      const role = roleData?.role || UserRole.MERCHANT;
+
+      // Generate JWT
+      const token = this.generateToken({
+        userId,
+        email,
+        role: role as UserRole,
+      });
+
+      logger.info('✓ Merchant login successful', {
+        userId,
+        email,
+        isApproved,
+      });
+
+      return {
+        user: {
+          id: userId,
+          email,
+          created_at: authData.user!.created_at!,
+        },
+        merchant: merchantSync as MerchantSync,
+        token,
+        expiresIn: config.jwtExpiry,
+        isApproved,
+      };
+    } catch (error) {
+      logger.error('Merchant login failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Customer login (if supporting non-merchant registrations)
+   */
+  async customerLogin(email: string, password: string): Promise<GuestLoginResponse> {
+    try {
+      logger.info('Customer login initiated', { email });
+
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (authError) {
+        logger.warn('Authentication failed', { email, error: authError.message });
+        throw new UnauthorizedError('Invalid email or password');
+      }
+
+      const userId = authData.user!.id;
+
+      // Get user role
+      const { data: roleData } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .single();
+
+      const role = roleData?.role || UserRole.CUSTOMER;
+
+      const token = this.generateToken({
+        userId,
+        email,
+        role: role as UserRole,
+      });
+
+      logger.info('✓ Customer login successful', { userId, email });
+
+      return {
+        user: {
+          id: userId,
+          email,
+          created_at: authData.user!.created_at!,
+        },
+        token,
+        expiresIn: config.jwtExpiry,
+      };
+    } catch (error) {
+      logger.error('Customer login failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Logout - token is stateless, client handles deletion
+   */
+  async logout(userId: string): Promise<void> {
+    try {
+      logger.info('User logout', { userId });
+      // Stateless JWT - just log the event
+      // In production, could maintain a blacklist if needed
+    } catch (error) {
+      logger.error('Logout failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Verify token validity
+   */
+  verifyToken(token: string): JWTPayload {
+    try {
+      return jwt.verify(token, config.jwtSecret) as JWTPayload;
+    } catch (error) {
+      logger.warn('Token verification failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new UnauthorizedError('Invalid or expired token');
+    }
+  }
+
+  /**
+   * Refresh token
+   */
+  refreshToken(oldToken: string): string {
+    try {
+      const decoded = this.verifyToken(oldToken);
+
+      const newToken = this.generateToken({
+        userId: decoded.userId,
+        email: decoded.email,
+        role: decoded.role,
+      });
+
+      logger.info('Token refreshed', { userId: decoded.userId });
+      return newToken;
+    } catch (error) {
+      logger.error('Token refresh failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+}
+
+export const authService = new AuthService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\services\valuedesign.ts
+// src/services/valuedesign.ts
+import axios from 'axios';
+
+const VD_API_BASE = process.env.VALUEDESIGN_API_URL || 'http://cards.vdwebapi.com';
+const VD_DISTRIBUTOR_ID = process.env.VD_DISTRIBUTOR_ID;
+const VD_PASSWORD = process.env.VD_PASSWORD;
+
+interface VDToken {
+  token: string;
+  expiry_date: string;
+}
+
+interface VDBrand {
+  BrandCode: string;
+  BrandName: string;
+  Discount: string;
+  Brandtype: string;
+  minPrice: number;
+  maxPrice: number;
+  DenominationList: string;
+  Category: string;
+  Description: string;
+  StockAvailable: number;
+  Images?: unknown;
+  TnC?: unknown;
+}
+
+interface VDVoucher {
+  getCardNo: string;
+  getCardPin: string;
+  getCardStatus: string;
+  getExpiryDate: string;
+  balanceBasic: string;
+  balanceBonus: string;
+  balanceTotal: string;
+}
+
+class ValueDesignService {
+  private token: VDToken | null = null;
+  private tokenExpiry: Date | null = null;
+
+  /**
+   * Generate or refresh token from ValueDesign
+   */
+  async getToken(): Promise<string> {
+    // Check if we have a valid cached token
+    if (this.token && this.tokenExpiry && new Date() < this.tokenExpiry) {
+      return this.token.token;
+    }
+
+    try {
+      const response = await axios.post(
+        `${VD_API_BASE}/distributor/api-generatetoken/`,
+        {
+          distributor_id: VD_DISTRIBUTOR_ID,
+          password: VD_PASSWORD,
+        }
+      );
+
+      if (response.data.responseCode !== 200) {
+        throw new Error(`Token generation failed: ${response.data.responseMsg}`);
+      }
+
+      this.token = {
+        token: response.data.token,
+        expiry_date: response.data.expiry_date,
+      };
+
+      // Set expiry 5 minutes before actual expiry for safety
+      const expiryDate = new Date(response.data.expiry_date);
+      this.tokenExpiry = new Date(expiryDate.getTime() - 5 * 60000);
+
+      console.log('ValueDesign token generated:', response.data.expiry_date);
+      return this.token.token;
+    } catch (error) {
+      console.error('Error generating ValueDesign token:', error);
+      throw new Error('Failed to authenticate with ValueDesign');
+    }
+  }
+
+  /**
+   * Get all available brands from ValueDesign
+   */
+  async getBrands(): Promise<VDBrand[]> {
+    try {
+      const token = await this.getToken();
+
+      const response = await axios.get(
+        `${VD_API_BASE}/distributor/api-getbrand/`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (!Array.isArray(response.data)) {
+        throw new Error('Invalid response format from ValueDesign');
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching brands from ValueDesign:', error);
+      throw new Error('Failed to fetch brands');
+    }
+  }
+
+  /**
+   * Get E-Voucher Cards (EVCs) for a specific brand
+   */
+  async getEVCs(brandCode?: string): Promise<unknown> {
+    try {
+      const token = await this.getToken();
+
+      const response = await axios.get(
+        `${VD_API_BASE}/distributor/getevc/`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          params: brandCode ? { brand_code: brandCode } : {},
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching EVCs from ValueDesign:', error);
+      throw new Error('Failed to fetch vouchers');
+    }
+  }
+
+  /**
+   * Get store locations for a brand
+   */
+  async getStores(brandCode: string): Promise<unknown> {
+    try {
+      const token = await this.getToken();
+
+      const response = await axios.get(
+        `${VD_API_BASE}/distributor/api-getstore/`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          params: { brand_code: brandCode },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching stores from ValueDesign:', error);
+      throw new Error('Failed to fetch store locations');
+    }
+  }
+
+  /**
+   * Purchase vouchers from ValueDesign
+   * This endpoint would need to be implemented based on ValueDesign's purchase API
+   */
+  async purchaseVoucher(
+    brandCode: string,
+    denomination: number,
+    quantity: number
+  ): Promise<unknown> {
+    try {
+      const token = await this.getToken();
+
+      // This is a placeholder - adjust based on actual ValueDesign purchase API
+      const response = await axios.post(
+        `${VD_API_BASE}/distributor/api-purchase/`,
+        {
+          brand_code: brandCode,
+          denomination,
+          quantity,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('Error purchasing voucher from ValueDesign:', error);
+      throw new Error('Failed to purchase voucher');
+    }
+  }
+
+  /**
+   * Check voucher balance
+   */
+  async checkVoucherBalance(voucherCode: string): Promise<unknown> {
+    try {
+      const token = await this.getToken();
+
+      const response = await axios.post(
+        `${VD_API_BASE}/distributor/api-checkbalance/`,
+        {
+          voucher_code: voucherCode,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('Error checking voucher balance:', error);
+      throw new Error('Failed to check voucher balance');
+    }
+  }
+}
+
+export default new ValueDesignService();
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\types\database.ts
+
+export interface User {
+  id: string;
+  email: string;
+  created_at: string;
+}
+
+export enum UserRole {
+  ADMIN = 'admin',
+  DISTRIBUTOR = 'distributor',
+  MERCHANT = 'merchant',
+  CUSTOMER = 'customer',
+  GUEST = 'guest',
+}
+
+export interface UserRoleRecord {
+  id: string;
+  user_id: string;
+  role: UserRole;
+  created_at: string;
+}
+
+export interface MerchantProfile {
+  id: string;
+  user_id: string;
+  full_name: string;
+  mobile_number: string;
+  email: string;
+  pan_number?: string;
+  aadhaar_number?: string;
+  business_name?: string;
+  gst_number?: string;
+  onboarding_status: OnboardingStatus;
+  distributor_id?: string;
+  entity_type?: string;
+  risk_level?: string;
+  application_id?: string;
+  upi_vpa?: string;
+  upi_qr_string?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export enum OnboardingStatus {
+  PENDING = 'pending',
+  SUBMITTED = 'submitted',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+}
+
+export interface MerchantSync {
+  id: string;
+  merchant_id: string;
+  user_id: string;
+  business_name: string;
+  email: string;
+  mobile_number?: string;
+  is_approved: boolean;
+  approved_at?: string;
+  last_synced_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BrandCache {
+  id: string;
+  brand_code: string;
+  brand_name: string;
+  category?: string;
+  discount?: number;
+  denomination_list?: string;
+  brand_type?: string;
+  stock_available?: number;
+  is_active: boolean;
+  description?: string;
+  terms_conditions?: string;
+  images?: Record<string, unknown>;
+  last_fetched_at: string;
+  cache_expires_at?: string;
+  category_id?: string;
+  slug?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VoucherCategory {
+  id: string;
+  category_name: string;
+  category_slug: string;
+  icon?: string;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface VoucherOrder {
+  id: string;
+  order_id: string; // Unique order identifier
+  merchant_id: string;
+  user_id: string;
+  brand_code: string;
+  brand_name: string;
+  sku_code: string;
+  quantity: number;
+  amount_per_voucher: number;
+  total_amount: number;
+  currency: string;
+  recipient_first_name: string;
+  recipient_last_name: string;
+  recipient_mobile: string;
+  recipient_email: string;
+  recipient_address?: string;
+  recipient_city?: string;
+  recipient_state?: string;
+  recipient_pincode?: string;
+  order_status: OrderStatus;
+  vd_request_ref_no?: string;
+  vd_response?: Record<string, unknown>;
+  error_code?: string;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+export enum OrderStatus {
+  PENDING = 'pending',
+  PROCESSING = 'processing',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+  REFUNDED = 'refunded',
+}
+
+export interface VoucherItem {
+  id: string;
+  order_id: string;
+  merchant_id: string;
+  card_number: string;
+  card_pin: string;
+  card_status: CardStatus;
+  balance_basic: number;
+  balance_bonus?: number;
+  balance_total: number;
+  bonus_given?: number;
+  deal_no?: string;
+  expiry_date: string;
+  activation_url?: string;
+  is_redeemed: boolean;
+  redeemed_at?: string;
+  redeemed_amount?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export enum CardStatus {
+  ACTIVE = 'active',
+  REDEEMED = 'redeemed',
+  EXPIRED = 'expired',
+  CANCELLED = 'cancelled',
+}
+
+export interface WalletBalance {
+  id: string;
+  wallet_type: string;
+  available_balance: number;
+  reserved_balance: number;
+  total_balance: number;
+  currency: string;
+  last_synced_balance?: number;
+  last_synced_at?: string;
+  sync_status: SyncStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export enum SyncStatus {
+  SYNCED = 'synced',
+  OUT_OF_SYNC = 'out_of_sync',
+  ERROR = 'error',
+}
+
+export interface WalletTransaction {
+  id: string;
+  transaction_type: TransactionType;
+  amount: number;
+  balance_before: number;
+  balance_after: number;
+  order_id?: string;
+  merchant_id?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export enum TransactionType {
+  TOPUP = 'topup',
+  DEBIT = 'debit',
+  REFUND = 'refund',
+  ADJUSTMENT = 'adjustment',
+  RESERVE = 'reserve',
+  RELEASE = 'release',
+}
+
+export interface ValueDesignTransaction {
+  id: string;
+  api_endpoint: string;
+  http_method: string;
+  request_payload?: Record<string, unknown>;
+  request_headers?: Record<string, unknown>;
+  response_status?: number;
+  response_payload?: Record<string, unknown>;
+  response_time_ms?: number;
+  order_id?: string;
+  merchant_id?: string;
+  is_success: boolean;
+  error_code?: string;
+  error_message?: string;
+  created_at: string;
+}
+
+export interface Notification {
+  id: string;
+  user_id?: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  action_url?: string;
+  action_label?: string;
+  read: boolean;
+  read_at?: string;
+  created_at: string;
+}
+
+export enum NotificationType {
+  SUCCESS = 'success',
+  ERROR = 'error',
+  WARNING = 'warning',
+  INFO = 'info',
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\types\payment.types.ts
+export interface Payment {
+  id: string;
+  order_id: string;
+  sabbpe_payment_id: string;
+  amount: number;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'REFUNDED';
+  webhook_received_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaymentWebhook {
+  paymentId: string;
+  orderId: string;
+  status: 'SUCCESS' | 'FAILED' | 'PENDING';
+  amount: number;
+  currency: string;
+  timestamp: string;
+  signature: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PaymentInitRequest {
+  orderId: string;
+  amount: number;
+  customerEmail: string;
+  customerPhone: string;
+  description: string;
+}
+
+export interface PaymentInitResponse {
+  paymentId: string;
+  paymentUrl: string;
+  status: string;
+  expiresAt: string;
+}
+
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\utils\errors.ts
+export class AppError extends Error {
+  constructor(
+    public statusCode: number,
+    message: string,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
+export class ValidationError extends AppError {
+  constructor(message: string) {
+    super(400, message, 'VALIDATION_ERROR');
+    this.name = 'ValidationError';
+  }
+}
+
+export class NotFoundError extends AppError {
+  constructor(resource: string) {
+    super(404, `${resource} not found`, 'NOT_FOUND');
+    this.name = 'NotFoundError';
+  }
+}
+
+export class UnauthorizedError extends AppError {
+  constructor(message = 'Unauthorized') {
+    super(401, message, 'UNAUTHORIZED');
+    this.name = 'UnauthorizedError';
+  }
+}
+
+export class ForbiddenError extends AppError {
+  constructor(message = 'Forbidden') {
+    super(403, message, 'FORBIDDEN');
+    this.name = 'ForbiddenError';
+  }
+}
+
+export class ConflictError extends AppError {
+  constructor(resource: string) {
+    super(409, `${resource} already exists`, 'CONFLICT');
+    this.name = 'ConflictError';
+  }
+}
+
+export class InternalServerError extends AppError {
+  constructor(message = 'Internal server error') {
+    super(500, message, 'INTERNAL_SERVER_ERROR');
+    this.name = 'InternalServerError';
+  }
+}
+
+export class ValueDesignError extends AppError {
+  constructor(message: string, statusCode = 500) {
+    super(statusCode, message, 'VALUEDESIGN_ERROR');
+    this.name = 'ValueDesignError';
+  }
+}
+
+export class SabbpeError extends AppError {
+  constructor(message: string, statusCode = 500) {
+    super(statusCode, message, 'SABBPE_ERROR');
+    this.name = 'SabbpeError';
+  }
+}
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\utils\logger.ts
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+interface LogEntry {
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+  context?: Record<string, unknown>;
+}
+
+class Logger {
+  private level: LogLevel;
+
+  constructor(level: LogLevel = 'info') {
+    this.level = level;
+  }
+
+  private formatLog(entry: LogEntry): string {
+    const { timestamp, level, message, context } = entry;
+    const contextStr = context ? ` | ${JSON.stringify(context)}` : '';
+    return `[${timestamp}] [${level.toUpperCase()}] ${message}${contextStr}`;
+  }
+
+  private shouldLog(level: LogLevel): boolean {
+    const levels: LogLevel[] = ['error', 'warn', 'info', 'debug'];
+    const currentIndex = levels.indexOf(this.level);
+    const messageIndex = levels.indexOf(level);
+    return messageIndex <= currentIndex;
+  }
+
+  error(message: string, context?: Record<string, unknown>): void {
+    if (this.shouldLog('error')) {
+      const entry: LogEntry = {
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        message,
+        context,
+      };
+      console.error(this.formatLog(entry));
+    }
+  }
+
+  warn(message: string, context?: Record<string, unknown>): void {
+    if (this.shouldLog('warn')) {
+      const entry: LogEntry = {
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        message,
+        context,
+      };
+      console.warn(this.formatLog(entry));
+    }
+  }
+
+  info(message: string, context?: Record<string, unknown>): void {
+    if (this.shouldLog('info')) {
+      const entry: LogEntry = {
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        message,
+        context,
+      };
+      console.log(this.formatLog(entry));
+    }
+  }
+
+  debug(message: string, context?: Record<string, unknown>): void {
+    if (this.shouldLog('debug')) {
+      const entry: LogEntry = {
+        timestamp: new Date().toISOString(),
+        level: 'debug',
+        message,
+        context,
+      };
+      console.log(this.formatLog(entry));
+    }
+  }
+}
+
+export const logger = new Logger((process.env.LOG_LEVEL as LogLevel) || 'info');
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\app.ts
+import express, { Express, Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import { config } from '@/config/env';
+import { testSupabaseConnection, supabase } from '@/config/supabase';
+import { initializeEncryption } from '@/config/encryption';
+import { registerErrorHandler } from '@/middleware/errorHandler';
+import { logger } from '@/utils/logger';
+
+// Import routes
+import authRoutes from '@/routes/auth.routes';
+import voucherRoutes from '@/routes/vouchers.routes';
+import orderRoutes from '@/routes/orders.routes';
+// TODO: import paymentRoutes from '@/routes/payment.routes';
+// TODO: import merchantRoutes from '@/routes/merchants.routes';
+// TODO: import walletRoutes from '@/routes/wallet.routes';
+
+export async function createApp(): Promise<Express> {
+  const app = express();
+
+  // ============================================
+  // SECURITY MIDDLEWARE
+  // ============================================
+
+  app.use(helmet());
+
+  // CORS - Only allow GCP IP
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        const allowedOrigins = [config.gcpIpWhitelist, 'http://localhost:3000'];
+
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('CORS policy violation'));
+        }
+      },
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    })
+  );
+
+  // ============================================
+  // BODY PARSING MIDDLEWARE
+  // ============================================
+
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+  // ============================================
+  // REQUEST LOGGING MIDDLEWARE
+  // ============================================
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const startTime = Date.now();
+
+    res.on('finish', () => {
+      const duration = Date.now() - startTime;
+      const isError = res.statusCode >= 400;
+      const logLevel = isError ? 'warn' : 'info';
+
+      logger[logLevel as 'info' | 'warn'](`${req.method} ${req.path}`, {
+        statusCode: res.statusCode,
+        duration: `${duration}ms`,
+        ip: req.ip,
+      });
+    });
+
+    next();
+  });
+
+  // ============================================
+  // HEALTH CHECK ENDPOINTS
+  // ============================================
+
+  app.get('/health', (req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+
+  app.get('/health/db', async (req: Request, res: Response) => {
+    try {
+      const isConnected = await testSupabaseConnection();
+      res.json({
+        status: isConnected ? 'ok' : 'error',
+        database: isConnected ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      res.status(500).json({
+        status: 'error',
+        database: 'disconnected',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  // ============================================
+  // API ROUTES
+  // ============================================
+
+  app.use('/api/auth', authRoutes);
+  app.use('/api/vouchers', voucherRoutes);
+  app.use('/api/orders', orderRoutes);
+  // app.use('/api/payment', paymentRoutes);
+  // app.use('/api/merchants', merchantRoutes);
+  // app.use('/api/wallet', walletRoutes);
+
+  // ============================================
+  // ERROR HANDLING
+  // ============================================
+
+  registerErrorHandler(app);
+
+  return app;
+}
+
+export async function startServer(): Promise<void> {
+  try {
+    logger.info('Starting ValueDesign + Sabbpe Backend...', {
+      env: config.nodeEnv,
+      port: config.port,
+    });
+
+    // ============================================
+    // INITIALIZATION
+    // ============================================
+
+    // Test Supabase connection
+    logger.info('Testing Supabase connection...');
+    const dbConnected = await testSupabaseConnection();
+    if (!dbConnected && config.nodeEnv === 'production') {
+      throw new Error('Failed to connect to Supabase in production');
+    }
+
+    // Initialize encryption services
+    logger.info('Initializing encryption services...');
+    initializeEncryption();
+
+    // Create Express app
+    logger.info('Creating Express app...');
+    const app = await createApp();
+
+    // ============================================
+    // START SERVER
+    // ============================================
+
+    app.listen(config.port, () => {
+      logger.info('✓ Server started successfully', {
+        port: config.port,
+        env: config.nodeEnv,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Print API endpoints summary
+      logger.info('Available endpoints:');
+      logger.info('  Auth: POST /api/auth/guest-login');
+      logger.info('  Auth: POST /api/auth/merchant-register');
+      logger.info('  Auth: POST /api/auth/merchant-login');
+      logger.info('  Auth: GET /api/auth/me');
+      logger.info('  Vouchers: GET /api/vouchers/categories');
+      logger.info('  Vouchers: GET /api/vouchers/brands');
+      logger.info('  Vouchers: GET /api/vouchers/brands/:brandCode');
+      logger.info('  Orders: POST /api/orders');
+      logger.info('  Orders: GET /api/orders');
+      logger.info('  Orders: GET /api/orders/:orderId');
+      logger.info('  Orders: GET /api/orders/:orderId/items');
+      logger.info('  Orders: POST /api/orders/:orderId/cancel');
+      logger.info('  Health: GET /health');
+      logger.info('  Health: GET /health/db');
+    });
+  } catch (error) {
+    logger.error('Failed to start server', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    process.exit(1);
+  }
+}
+
+// Start server if this is the main module
+if (require.main === module) {
+  startServer();
+}
+
+
+// ============================================
+// FILE: src/index.ts (ENTRY POINT)
+// ============================================
+
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+import { startServer } from '@/app';
+
+startServer().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
+
+C:\Users\shubh\Downloads\GV\giftgo-shop-app-main\backend\src\index.ts
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+import { startServer } from '@/app';
+
+startServer().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
